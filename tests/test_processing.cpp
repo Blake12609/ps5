@@ -120,6 +120,32 @@ TEST_CASE("hair trigger fires instantly and works as a rapid trigger") {
     CHECK(p.apply(0.04f, t) == 1.0f);   // after a full release the next pull fires at once
 }
 
+TEST_CASE("hair trigger resets on a 1% lift at any depth") {
+    TriggerSettings t;
+    t.mode = TriggerMode::HairTrigger;
+    CHECK(t.hairResetDistance == doctest::Approx(0.01f));  // default
+    auto counts = [](int c) { return static_cast<float>(c) / 255.0f; };  // the sensor reports 0..255
+    for (int depth : {10, 40, 128, 200, 255}) {
+        CAPTURE(depth);
+        TriggerProcessor p;
+        CHECK(p.apply(counts(depth), t) == 1.0f);
+        CHECK(p.apply(counts(depth - 3), t) == 0.0f);  // eased off ~1%: released straight away
+        CHECK(p.apply(counts(depth - 1), t) == 0.0f);
+        CHECK(p.apply(counts(depth), t) == 1.0f);      // pulled ~1% again: fires again
+    }
+}
+
+TEST_CASE("hair trigger ignores sensor noise while held steady") {
+    TriggerSettings t;
+    t.mode = TriggerMode::HairTrigger;
+    TriggerProcessor p;
+    CHECK(p.apply(120.0f / 255.0f, t) == 1.0f);
+    for (int i = 0; i < 50; ++i) {
+        const int wobble = (i % 3) - 1;  // +-1 step of noise
+        CHECK(p.apply(static_cast<float>(120 + wobble) / 255.0f, t) == 1.0f);
+    }
+}
+
 TEST_CASE("hair trigger activation point") {
     TriggerSettings t;
     t.mode = TriggerMode::HairTrigger;

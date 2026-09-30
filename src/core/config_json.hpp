@@ -6,7 +6,8 @@
 
 namespace edgepad {
 
-inline constexpr int kConfigFormatVersion = 1;
+// 2: hair trigger reset distance default went from 4% to 1%.
+inline constexpr int kConfigFormatVersion = 2;
 
 std::string configToJson(const Config& cfg);
 

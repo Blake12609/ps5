@@ -166,7 +166,7 @@ float TriggerProcessor::apply(float value, const TriggerSettings& s, float dtSec
 float TriggerProcessor::hair(float value, const TriggerSettings& s) {
     const float v = clamp01(value);
     const float activation = std::max(std::min(clamp01(s.deadzone), 0.9f), kHairMinActivation);
-    const float resetDistance = std::clamp(s.hairResetDistance, 0.01f, 0.5f);
+    const float resetDistance = std::clamp(s.hairResetDistance, kHairMinReset, 0.5f);
 
     if (v <= activation) {  // back at the top: always released, next pull fires immediately
         pressed_ = false;

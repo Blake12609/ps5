@@ -157,9 +157,10 @@ void helpMarker(const char* text) {
     }
 }
 
-bool sliderPercent(const char* label, float* value, float minPct, float maxPct, const char* help = nullptr) {
+bool sliderPercent(const char* label, float* value, float minPct, float maxPct, const char* help = nullptr,
+                   const char* format = "%.0f%%") {
     float pct = *value * 100.0f;
-    const bool changed = ImGui::SliderFloat(label, &pct, minPct, maxPct, "%.0f%%", ImGuiSliderFlags_AlwaysClamp);
+    const bool changed = ImGui::SliderFloat(label, &pct, minPct, maxPct, format, ImGuiSliderFlags_AlwaysClamp);
     if (changed) *value = pct / 100.0f;
     if (help) helpMarker(help);
     return changed;
@@ -759,10 +760,12 @@ private:
                 t.deadzone = activation;
                 changed_ = true;
             }
-            changed_ |= sliderPercent("Reset distance", &t.hairResetDistance, 1, 30,
-                                      "Rapid trigger: the press releases as soon as the trigger comes back up "
-                                      "this far, and fires again as soon as you pull down this far - anywhere in "
-                                      "the travel, no need to let go completely. Smaller = faster follow-up shots.");
+            changed_ |= sliderPercent("Reset distance", &t.hairResetDistance, kHairMinReset * 100.0f, 20,
+                                      "Rapid trigger: the press releases the moment the trigger comes back up this "
+                                      "far and fires again the moment you pull down this far - at any depth, no need "
+                                      "to let go completely. 1% resets on the slightest lift; raise it only if a "
+                                      "steady hold ever releases by itself.",
+                                      "%.1f%%");
         } else {
             changed_ |= sliderPercent("Dead zone (start)", &t.deadzone, 0, 90, "Trigger travel ignored at the start.");
             changed_ |= sliderPercent("Trigger stop (end)", &t.maxRange, 5, 100,

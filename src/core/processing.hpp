@@ -37,6 +37,11 @@ struct StickSettings {
     bool operator==(const StickSettings&) const = default;
 };
 
+// Hair trigger reset distance: default 1% (about 3 steps of the trigger sensor, so holding the
+// trigger steady never releases it by accident), minimum 0.5%.
+inline constexpr float kHairDefaultReset = 0.01f;
+inline constexpr float kHairMinReset = 0.005f;
+
 struct TriggerSettings {
     float deadzone = 0.0f;  // start of the effective range (hair trigger: activation point)
     float maxRange = 1.0f;  // end of the effective range (software trigger stop)
@@ -47,7 +52,7 @@ struct TriggerSettings {
     int resistanceStrength = 6;                             // 1..8
     // Hair trigger: how far the trigger has to come back up to release, and go down again to
     // fire, anywhere in its travel (rapid trigger). Smaller = faster follow-up shots.
-    float hairResetDistance = 0.04f;
+    float hairResetDistance = kHairDefaultReset;
     bool turbo = false;        // rapid fire: pulse full presses while the trigger is pressed
     int turboIntervalMs = 50;  // time between turbo presses, 1..100 ms
 

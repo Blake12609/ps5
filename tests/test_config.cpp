@@ -73,3 +73,14 @@ TEST_CASE("an empty profile list gets the built-in profiles") {
     const Config cfg = configFromJson(R"({"profiles": []})");
     CHECK(cfg.profiles.size() == Config::defaults().profiles.size());
 }
+
+TEST_CASE("old files move the hair trigger reset from the old 4% default to 1%") {
+    const std::string v1 = R"({"version": 1, "profiles": [{"l2": {"mode": "hair", "hair_reset_distance": 0.04},
+                                                          "r2": {"mode": "hair", "hair_reset_distance": 0.1}}]})";
+    const Config migrated = configFromJson(v1);
+    CHECK(migrated.profiles[0].l2.hairResetDistance == doctest::Approx(0.01f));
+    CHECK(migrated.profiles[0].r2.hairResetDistance == doctest::Approx(0.1f));  // a custom value stays
+
+    const std::string v2 = R"({"version": 2, "profiles": [{"l2": {"hair_reset_distance": 0.04}}]})";
+    CHECK(configFromJson(v2).profiles[0].l2.hairResetDistance == doctest::Approx(0.04f));  // chosen on purpose
+}

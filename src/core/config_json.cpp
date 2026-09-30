@@ -1,6 +1,7 @@
 #include "core/config_json.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include <nlohmann/json.hpp>
 
@@ -353,6 +354,16 @@ Config configFromJson(const std::string& text, std::string* warning) {
         cfg.profiles.clear();
         for (const auto& p : *it) {
             if (p.is_object()) cfg.profiles.push_back(profileFromJson(p));
+        }
+    }
+    int version = 1;
+    readInt(root, "version", version);
+    if (version < 2) {
+        // Files from before version 2 saved the old 4% hair trigger reset default: move it to the new 1%.
+        for (auto& p : cfg.profiles) {
+            for (TriggerSettings* t : {&p.l2, &p.r2}) {
+                if (std::fabs(t->hairResetDistance - 0.04f) < 1e-4f) t->hairResetDistance = kHairDefaultReset;
+            }
         }
     }
     cfg.normalize();
