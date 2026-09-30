@@ -29,7 +29,7 @@ struct StickSettings {
     float curveIntensity = 0.5f;  // 0..1, how strongly the curve bends
     std::vector<CurvePoint> customCurve{{0.25f, 0.15f}, {0.5f, 0.4f}, {0.75f, 0.7f}};
     // GameSir style RC filter, -1..1, only active while the stick is moved.
-    // Positive: low-pass "stabilizer" smoothing. Negative: "jitter", a microscopic alternating wobble.
+    // Positive: RC low-pass "stabilizer". Negative: "jitter", the mirror image of that low-pass.
     float rcFilter = 0.0f;
     bool invertX = false;
     bool invertY = false;
@@ -106,10 +106,6 @@ private:
 
 // Maximum time constant of the RC low-pass at rcFilter = 1.0 (seconds).
 inline constexpr float kRcMaxTimeConstant = 0.040f;
-// Maximum jitter amplitude at rcFilter = -1.0 (fraction of full stick throw).
-inline constexpr float kRcMaxJitter = 0.06f;
-// The jitter wobble changes side on a fixed clock, so it looks the same at any polling rate.
-inline constexpr float kRcJitterFlipSeconds = 0.005f;
 // The RC filter only runs once the stick is pushed past its dead zone, and at least this far,
 // so stick noise at rest never triggers it.
 inline constexpr float kRcMinActiveDeflection = 0.03f;
@@ -162,23 +158,19 @@ private:
 // True while the stick is being moved, i.e. pushed past its dead zone.
 bool stickActive(float x, float y, const StickSettings& s);
 
-// GameSir style RC filter. It only works while the stick is moved (`active`); at rest the
-// stick is left alone, so there is no smoothing tail and no jitter when you let go.
+// GameSir style RC filter on the raw stick, one RC stage with time constant |strength| * 40 ms.
+//  strength > 0 (stabilizer): output = low-pass(stick), it lags behind the thumb and smooths.
+//  strength < 0 (jitter):     output = stick + (stick - low-pass(stick)), the exact mirror: it runs
+//                             ahead of the thumb, amplifying micro-movements and sensor noise.
+// Both sides are symmetric around the real stick position. It only works while the stick is moved
+// (`active`); at rest the stick is left alone, so nothing is added and letting go stops instantly.
 class RcFilter {
 public:
-    // Stabilizer (strength > 0): RC low-pass on the raw stick, applied before processStick().
-    Vec2 smooth(Vec2 raw, float strength, float dtSeconds, bool active);
-    // Jitter (strength < 0): a small side-to-side wobble across the aim direction, applied to the
-    // processed output. It never shortens the stick vector, so aim speed is unchanged and the
-    // output never drops back into the game's dead zone.
-    Vec2 jitter(Vec2 out, float strength, float dtSeconds, bool active);
+    Vec2 apply(Vec2 raw, float strength, float dtSeconds, bool active);
     void reset();
 
 private:
-    Vec2 state_{};
-    bool primed_ = false;
-    float jitterClock_ = 0.0f;
-    float jitterSide_ = 1.0f;
+    Vec2 state_{};  // the RC low-pass
 };
 
 }  // namespace edgepad

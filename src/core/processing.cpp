@@ -259,61 +259,27 @@ bool stickActive(float x, float y, const StickSettings& s) {
     return std::hypot(x, y) > std::max(clamp01(s.deadzone), kRcMinActiveDeflection);
 }
 
-Vec2 RcFilter::smooth(Vec2 raw, float strength, float dtSeconds, bool active) {
+Vec2 RcFilter::apply(Vec2 raw, float strength, float dtSeconds, bool active) {
     strength = clamp11(strength);
-    if (!active || strength <= 0.0f) {
+    if (!active || strength == 0.0f) {
         // Follow the stick exactly while it rests: letting go stops instantly, and the next
-        // movement is smoothed starting from where the stick really is.
+        // movement is filtered starting from where the stick really is.
         state_ = raw;
-        primed_ = true;
         return raw;
     }
-    if (!primed_) {
-        state_ = raw;
-        primed_ = true;
-        return raw;
-    }
-    // First order RC low-pass: alpha = dt / (RC + dt). Time based, so the
-    // feel does not change with the controller's polling rate.
+    // One first order RC stage, alpha = dt / (RC + dt). Time based, so the feel does not
+    // change with the controller's polling rate.
     const float dt = std::clamp(dtSeconds, 0.0005f, 0.1f);
-    const float rc = strength * kRcMaxTimeConstant;
+    const float rc = std::fabs(strength) * kRcMaxTimeConstant;
     const float alpha = dt / (rc + dt);
     state_.x += alpha * (raw.x - state_.x);
     state_.y += alpha * (raw.y - state_.y);
-    return state_;
+    if (strength > 0.0f) return state_;  // stabilizer: the low-pass itself, lags behind the thumb
+    // Jitter: the exact mirror of the low-pass. It runs ahead of the thumb by as much as the
+    // low-pass lags behind, which amplifies every micro-movement and bit of sensor noise.
+    return {clamp11(raw.x + (raw.x - state_.x)), clamp11(raw.y + (raw.y - state_.y))};
 }
 
-Vec2 RcFilter::jitter(Vec2 out, float strength, float dtSeconds, bool active) {
-    strength = clamp11(strength);
-    const float magnitude = std::hypot(out.x, out.y);
-    if (!active || strength >= 0.0f || magnitude <= 1e-4f) {
-        jitterClock_ = 0.0f;
-        jitterSide_ = 1.0f;
-        return out;
-    }
-    // Change side on a fixed clock (not per report) so it is identical at 250 or 1000 Hz.
-    jitterClock_ += std::clamp(dtSeconds, 0.0f, 0.1f);
-    while (jitterClock_ >= kRcJitterFlipSeconds) {
-        jitterClock_ -= kRcJitterFlipSeconds;
-        jitterSide_ = -jitterSide_;
-    }
-    // Offset at right angles to the stick direction: the aim wobbles side to side around the
-    // target while the length of the stick vector (aim speed) never drops.
-    const float amplitude = -strength * kRcMaxJitter * jitterSide_;
-    Vec2 j{out.x - (out.y / magnitude) * amplitude, out.y + (out.x / magnitude) * amplitude};
-    const float length = std::hypot(j.x, j.y);
-    if (length > 1.0f) {
-        j.x /= length;
-        j.y /= length;
-    }
-    return j;
-}
-
-void RcFilter::reset() {
-    state_ = {};
-    primed_ = false;
-    jitterClock_ = 0.0f;
-    jitterSide_ = 1.0f;
-}
+void RcFilter::reset() { state_ = {}; }
 
 }  // namespace edgepad

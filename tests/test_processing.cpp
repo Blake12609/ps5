@@ -184,98 +184,98 @@ TEST_CASE("RC filter: the stick counts as moving once it leaves its dead zone") 
 
 TEST_CASE("RC filter: zero strength passes the signal through") {
     RcFilter f;
-    const Vec2 out = f.smooth({0.3f, -0.2f}, 0.0f, 0.004f, true);
+    const Vec2 out = f.apply({0.3f, -0.2f}, 0.0f, 0.004f, true);
     CHECK(out.x == 0.3f);
     CHECK(out.y == -0.2f);
-    const Vec2 same = f.jitter({0.3f, -0.2f}, 0.0f, 0.004f, true);
-    CHECK(same.x == 0.3f);
-    CHECK(same.y == -0.2f);
 }
 
 TEST_CASE("RC filter: stabilizer is a first order low-pass while the stick moves") {
     RcFilter f;
-    f.smooth({0.0f, 0.0f}, 0.5f, 0.004f, false);
-    const Vec2 first = f.smooth({1.0f, 0.0f}, 0.5f, 0.004f, true);
+    f.apply({0.0f, 0.0f}, 0.5f, 0.004f, false);
+    const Vec2 first = f.apply({1.0f, 0.0f}, 0.5f, 0.004f, true);
     const float rc = 0.5f * kRcMaxTimeConstant;
     CHECK(first.x == doctest::Approx(0.004f / (rc + 0.004f)));
     Vec2 out{};
-    for (int i = 0; i < 400; ++i) out = f.smooth({1.0f, 0.0f}, 0.5f, 0.004f, true);
+    for (int i = 0; i < 400; ++i) out = f.apply({1.0f, 0.0f}, 0.5f, 0.004f, true);
     CHECK(out.x == doctest::Approx(1.0f).epsilon(0.001));
 }
 
-TEST_CASE("RC filter: stabilizer stops instantly when the stick is released") {
-    RcFilter f;
-    for (int i = 0; i < 50; ++i) f.smooth({0.9f, 0.1f}, 1.0f, 0.004f, true);
-    const Vec2 released = f.smooth({0.01f, 0.0f}, 1.0f, 0.004f, false);
-    CHECK(released.x == 0.01f);
-    CHECK(released.y == 0.0f);
+TEST_CASE("RC filter: stops instantly when the stick is released") {
+    for (float strength : {1.0f, -1.0f}) {
+        RcFilter f;
+        for (int i = 0; i < 50; ++i) f.apply({0.9f, 0.1f}, strength, 0.004f, true);
+        const Vec2 released = f.apply({0.01f, 0.0f}, strength, 0.004f, false);
+        CHECK(released.x == 0.01f);
+        CHECK(released.y == 0.0f);
+    }
 }
 
 TEST_CASE("RC filter: smoothing does not depend on the polling rate") {
-    RcFilter slow, fast;
-    slow.smooth({0.0f, 0.0f}, 0.6f, 0.004f, false);
-    fast.smooth({0.0f, 0.0f}, 0.6f, 0.001f, false);
-    Vec2 a{}, b{};
-    for (int i = 0; i < 10; ++i) a = slow.smooth({1.0f, 0.0f}, 0.6f, 0.004f, true);  // 40 ms at 250 Hz
-    for (int i = 0; i < 40; ++i) b = fast.smooth({1.0f, 0.0f}, 0.6f, 0.001f, true);  // 40 ms at 1000 Hz
-    CHECK(a.x == doctest::Approx(b.x).epsilon(0.05));
+    for (float strength : {0.6f, -0.6f}) {
+        RcFilter slow, fast;
+        slow.apply({0.0f, 0.0f}, strength, 0.004f, false);
+        fast.apply({0.0f, 0.0f}, strength, 0.001f, false);
+        Vec2 a{}, b{};
+        for (int i = 0; i < 10; ++i) a = slow.apply({0.5f, 0.0f}, strength, 0.004f, true);  // 40 ms at 250 Hz
+        for (int i = 0; i < 40; ++i) b = fast.apply({0.5f, 0.0f}, strength, 0.001f, true);  // 40 ms at 1000 Hz
+        CHECK(a.x == doctest::Approx(b.x).epsilon(0.05));
+    }
 }
 
-TEST_CASE("RC filter: jitter wobbles side to side across the aim direction") {
+TEST_CASE("RC filter: jitter is the exact mirror of the stabilizer") {
+    // Any stick movement: stabilizer + jitter = 2 x the real stick, report by report.
+    RcFilter stabilizer, jitter;
+    stabilizer.apply({0.2f, 0.1f}, 0.7f, 0.004f, false);
+    jitter.apply({0.2f, 0.1f}, -0.7f, 0.004f, false);
+    for (int i = 0; i < 200; ++i) {
+        const float t = static_cast<float>(i) * 0.004f;
+        const Vec2 stick{0.4f + 0.3f * std::sin(t * 9.0f), 0.2f * std::cos(t * 5.0f)};
+        const Vec2 lag = stabilizer.apply(stick, 0.7f, 0.004f, true);
+        const Vec2 lead = jitter.apply(stick, -0.7f, 0.004f, true);
+        CHECK((lag.x + lead.x) / 2.0f == doctest::Approx(stick.x));
+        CHECK((lag.y + lead.y) / 2.0f == doctest::Approx(stick.y));
+    }
+}
+
+TEST_CASE("RC filter: jitter runs ahead of the thumb and amplifies micro-movements") {
     RcFilter f;
-    float sum = 0.0f;
-    bool sawUp = false, sawDown = false;
-    for (int i = 0; i < 1000; ++i) {  // one second at 1000 Hz, aiming straight right
-        const Vec2 out = f.jitter({0.5f, 0.0f}, -1.0f, 0.001f, true);
-        CHECK(out.x == doctest::Approx(0.5f));  // speed along the push is untouched
-        CHECK(std::fabs(out.y) == doctest::Approx(kRcMaxJitter));
-        sawUp |= out.y > 0.0f;
-        sawDown |= out.y < 0.0f;
-        sum += out.y;
+    f.apply({0.5f, 0.0f}, -1.0f, 0.004f, false);
+    // Pushing further: the output leads the stick.
+    float stick = 0.5f;
+    Vec2 out{};
+    for (int i = 0; i < 10; ++i) {
+        stick += 0.01f;
+        out = f.apply({stick, 0.0f}, -1.0f, 0.004f, true);
     }
-    CHECK(sawUp);
-    CHECK(sawDown);
-    CHECK(std::fabs(sum / 1000.0f) < 0.005f);  // averages out: no drift
+    CHECK(out.x > stick);
+    // Tiny +-1 step sensor noise while aiming comes out bigger than it went in.
+    RcFilter n;
+    n.apply({0.5f, 0.0f}, -1.0f, 0.004f, false);
+    float minOut = 1.0f, maxOut = -1.0f;
+    for (int i = 0; i < 100; ++i) {
+        const float noisy = 0.5f + ((i % 2) ? 1.0f : -1.0f) / 127.0f;
+        const float x = n.apply({noisy, 0.0f}, -1.0f, 0.004f, true).x;
+        minOut = std::min(minOut, x);
+        maxOut = std::max(maxOut, x);
+    }
+    CHECK(maxOut - minOut > 1.8f * (2.0f / 127.0f));
 }
 
-TEST_CASE("RC filter: jitter never shortens the stick vector") {
-    for (float angle = 0.0f; angle < 6.28f; angle += 0.3f) {
-        for (float length : {0.12f, 0.5f, 1.0f}) {
-            RcFilter f;
-            const Vec2 base{length * std::cos(angle), length * std::sin(angle)};
-            for (int i = 0; i < 20; ++i) {
-                const Vec2 out = f.jitter(base, -1.0f, 0.004f, true);
-                const float outLength = std::hypot(out.x, out.y);
-                CHECK(outLength >= length - 1e-5f);  // never back into the game's dead zone
-                CHECK(outLength <= 1.0f + 1e-5f);
-            }
-        }
+TEST_CASE("RC filter: holding perfectly still adds no jitter") {
+    RcFilter f;
+    f.apply({0.6f, 0.2f}, -1.0f, 0.004f, false);
+    for (int i = 0; i < 50; ++i) {
+        const Vec2 out = f.apply({0.6f, 0.2f}, -1.0f, 0.004f, true);
+        CHECK(out.x == doctest::Approx(0.6f));
+        CHECK(out.y == doctest::Approx(0.2f));
     }
-}
-
-TEST_CASE("RC filter: jitter speed does not depend on the polling rate") {
-    auto sideChanges = [](float dt, int reports) {
-        RcFilter f;
-        int changes = 0;
-        float previous = 0.0f;
-        for (int i = 0; i < reports; ++i) {
-            const float y = f.jitter({0.5f, 0.0f}, -1.0f, dt, true).y;
-            if (i > 0 && (y > 0.0f) != (previous > 0.0f)) ++changes;
-            previous = y;
-        }
-        return changes;
-    };
-    const int at250 = sideChanges(0.004f, 250);    // one second at 250 Hz
-    const int at1000 = sideChanges(0.001f, 1000);  // one second at 1000 Hz
-    CHECK(at250 == doctest::Approx(1.0f / kRcJitterFlipSeconds).epsilon(0.02));
-    CHECK(at1000 == doctest::Approx(1.0f / kRcJitterFlipSeconds).epsilon(0.02));
 }
 
 TEST_CASE("RC filter: no jitter while the stick rests") {
     RcFilter f;
     for (int i = 0; i < 8; ++i) {
-        const Vec2 out = f.jitter({0.4f, 0.1f}, -1.0f, 0.004f, false);
-        CHECK(out.x == 0.4f);
-        CHECK(out.y == 0.1f);
+        const float wobble = (i % 2) ? 0.02f : -0.02f;
+        const Vec2 out = f.apply({wobble, 0.0f}, -1.0f, 0.004f, false);
+        CHECK(out.x == wobble);
     }
 }

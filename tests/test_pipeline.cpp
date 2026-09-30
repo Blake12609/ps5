@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <cmath>
+
 #include "core/pipeline.hpp"
 
 using namespace edgepad;
@@ -118,27 +120,30 @@ TEST_CASE("swap sticks") {
     CHECK(out.rx == doctest::Approx(1.0f));
 }
 
-TEST_CASE("RC jitter only wobbles the stick while it is moved") {
+TEST_CASE("RC jitter only acts while the stick is moved") {
     Config cfg = testConfig();
     StickSettings& right = cfg.active().rightStick;
     right.deadzone = 0.0f;       // worst case: no dead zone
-    right.antiDeadzone = 0.2f;   // and an anti-dead zone that would amplify any jitter
+    right.antiDeadzone = 0.2f;   // and an anti-dead zone that would amplify anything
     right.rcFilter = -1.0f;
     Pipeline p;
     for (int i = 0; i < 8; ++i) {  // hands off the stick: perfectly still output
-        const OutputState out = p.process(InputState{}, cfg, 0.004f);
-        CHECK(out.rx == 0.0f);
+        InputState resting;
+        resting.rx = (i % 2) ? 0.015f : -0.015f;  // resting sensor noise
+        const OutputState out = p.process(resting, cfg, 0.004f);
+        CHECK(std::fabs(out.rx) == doctest::Approx(processStick(0.015f, 0.0f, right).x));
         CHECK(out.ry == 0.0f);
     }
+    // Moving: a step in the stick overshoots (runs ahead), then settles on the real position.
     InputState moved;
-    moved.rx = 0.6f;  // pushing right
+    moved.rx = 0.4f;
+    p.process(moved, cfg, 0.004f);
+    moved.rx = 0.6f;
     const float steady = processStick(0.6f, 0.0f, right).x;
-    const OutputState a = p.process(moved, cfg, 0.004f);
-    const OutputState b = p.process(moved, cfg, 0.004f);
-    CHECK(a.rx == doctest::Approx(steady));  // aim speed unchanged
-    CHECK(b.rx == doctest::Approx(steady));
-    CHECK(a.ry == doctest::Approx(kRcMaxJitter));  // wobbles up and down across the push
-    CHECK(b.ry == doctest::Approx(-kRcMaxJitter));
+    CHECK(p.process(moved, cfg, 0.004f).rx > steady);
+    float settled = 0.0f;
+    for (int i = 0; i < 200; ++i) settled = p.process(moved, cfg, 0.004f).rx;
+    CHECK(settled == doctest::Approx(steady).epsilon(0.001));
 }
 
 TEST_CASE("RC stabilizer smooths movement but lets go instantly") {
