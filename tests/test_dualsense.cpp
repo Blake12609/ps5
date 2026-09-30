@@ -81,6 +81,19 @@ TEST_CASE("Bluetooth simple input report") {
     CHECK(parsed->state.r2 == doctest::Approx(1.0f));
 }
 
+TEST_CASE("Bluetooth simple report padded to 78 bytes (Windows) is not mistaken for USB") {
+    std::array<uint8_t, 78> report{};
+    report[0] = 0x01;
+    report[1] = report[2] = report[3] = report[4] = 128;
+    report[5] = 0x24;  // hat = down, cross
+    report[9] = 200;   // R2
+    const auto parsed = parseInputReport(report.data(), report.size());
+    REQUIRE(parsed);
+    CHECK(parsed->connection == Connection::Bluetooth);
+    CHECK(parsed->state.buttons == (bit(Button::DpadDown) | bit(Button::Cross)));
+    CHECK(parsed->state.r2 == doctest::Approx(200.0f / 255.0f));
+}
+
 TEST_CASE("unknown or empty reports are ignored") {
     const std::array<uint8_t, 4> junk{0x42, 1, 2, 3};
     CHECK_FALSE(parseInputReport(junk.data(), junk.size()));

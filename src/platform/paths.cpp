@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <system_error>
 #include <thread>
 
@@ -43,7 +44,9 @@ bool isWritableDirectory(const fs::path& dir) {
 
 fs::path userConfigDirectory() {
 #if defined(_WIN32)
-    if (const wchar_t* appData = _wgetenv(L"APPDATA")) return fs::path(appData) / "EdgePad";
+    wchar_t appData[MAX_PATH * 4];
+    const DWORD n = GetEnvironmentVariableW(L"APPDATA", appData, static_cast<DWORD>(std::size(appData)));
+    if (n > 0 && n < std::size(appData)) return fs::path(appData) / "EdgePad";
     return fs::temp_directory_path() / "EdgePad";
 #else
     if (const char* xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg) return fs::path(xdg) / "edgepad";

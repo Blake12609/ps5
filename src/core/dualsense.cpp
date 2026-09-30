@@ -18,6 +18,7 @@ constexpr size_t kButtons1 = 8;
 constexpr size_t kButtons2 = 9;
 constexpr size_t kStatus = 52;
 constexpr size_t kFullBodySize = 53;
+constexpr size_t kUsbInputReportSize = 64;
 
 // Offsets inside the common output report body.
 constexpr size_t kOutFlags0 = 0;
@@ -121,8 +122,9 @@ std::optional<ParsedReport> parseInputReport(const uint8_t* data, size_t length)
     if (data == nullptr || length == 0) return std::nullopt;
     const uint8_t id = data[0];
 
-    // USB: report 0x01, 64 bytes, body right after the id.
-    if (id == kUsbInputReportId && length >= 1 + kFullBodySize) {
+    // USB: report 0x01, 64 bytes, body right after the id. Over Bluetooth, Windows pads the
+    // short 0x01 report to the 78 byte maximum, so a longer 0x01 report is the BT simple one.
+    if (id == kUsbInputReportId && length >= 1 + kFullBodySize && length <= kUsbInputReportSize) {
         return ParsedReport{parseFullBody(data + 1, length - 1), Connection::Usb};
     }
     // Bluetooth full report: 0x31, 78 bytes, one extra header byte.
