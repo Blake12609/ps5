@@ -1,0 +1,1016 @@
+#include "app/gui.hpp"
+
+#define IMGUI_DEFINE_MATH_OPERATORS
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_opengl3.h>
+
+#include <GLFW/glfw3.h>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdio>
+#include <initializer_list>
+#include <string>
+#include <vector>
+
+#include "core/build_info.hpp"
+#include "core/pipeline.hpp"
+#include "core/processing.hpp"
+#include "platform/paths.hpp"
+#include "platform/self_update.hpp"
+#include "platform/virtual_pad.hpp"
+
+namespace fs = std::filesystem;
+
+namespace edgepad {
+namespace {
+
+// ---------------------------------------------------------------------------
+// Theme
+// ---------------------------------------------------------------------------
+constexpr ImU32 kAccent = IM_COL32(79, 140, 255, 255);
+constexpr ImU32 kAccentSoft = IM_COL32(79, 140, 255, 60);
+constexpr ImU32 kGood = IM_COL32(53, 196, 124, 255);
+constexpr ImU32 kWarn = IM_COL32(240, 160, 48, 255);
+constexpr ImU32 kBad = IM_COL32(255, 93, 93, 255);
+constexpr ImU32 kMuted = IM_COL32(154, 163, 178, 255);
+constexpr ImU32 kPanel = IM_COL32(28, 31, 38, 255);
+constexpr ImU32 kWell = IM_COL32(20, 22, 27, 255);
+constexpr ImU32 kGrid = IM_COL32(46, 51, 64, 255);
+constexpr ImU32 kDeadzone = IM_COL32(255, 93, 93, 40);
+constexpr ImU32 kRaw = IM_COL32(154, 163, 178, 200);
+
+ImVec4 rgb(int r, int g, int b, int a = 255) { return ImVec4(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f); }
+
+void applyTheme(float scale) {
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImGui::StyleColorsDark(&style);
+    style.WindowRounding = 0.0f;
+    style.ChildRounding = 10.0f;
+    style.FrameRounding = 6.0f;
+    style.PopupRounding = 8.0f;
+    style.GrabRounding = 6.0f;
+    style.TabRounding = 6.0f;
+    style.ScrollbarRounding = 8.0f;
+    style.WindowPadding = ImVec2(16, 14);
+    style.FramePadding = ImVec2(10, 6);
+    style.ItemSpacing = ImVec2(10, 8);
+    style.ItemInnerSpacing = ImVec2(8, 6);
+    style.GrabMinSize = 12.0f;
+    style.WindowBorderSize = 0.0f;
+    style.ChildBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f;
+    style.SeparatorTextBorderSize = 1.0f;
+
+    ImVec4* c = style.Colors;
+    c[ImGuiCol_Text] = rgb(230, 232, 238);
+    c[ImGuiCol_TextDisabled] = rgb(154, 163, 178);
+    c[ImGuiCol_WindowBg] = rgb(20, 22, 27);
+    c[ImGuiCol_ChildBg] = rgb(28, 31, 38);
+    c[ImGuiCol_PopupBg] = rgb(28, 31, 38);
+    c[ImGuiCol_Border] = rgb(46, 51, 64);
+    c[ImGuiCol_FrameBg] = rgb(38, 42, 52);
+    c[ImGuiCol_FrameBgHovered] = rgb(47, 53, 66);
+    c[ImGuiCol_FrameBgActive] = rgb(55, 62, 78);
+    c[ImGuiCol_CheckMark] = rgb(79, 140, 255);
+    c[ImGuiCol_SliderGrab] = rgb(79, 140, 255);
+    c[ImGuiCol_SliderGrabActive] = rgb(120, 168, 255);
+    c[ImGuiCol_Button] = rgb(38, 42, 52);
+    c[ImGuiCol_ButtonHovered] = rgb(50, 57, 72);
+    c[ImGuiCol_ButtonActive] = rgb(58, 120, 240);
+    c[ImGuiCol_Header] = rgb(42, 48, 64);
+    c[ImGuiCol_HeaderHovered] = rgb(50, 58, 77);
+    c[ImGuiCol_HeaderActive] = rgb(58, 120, 240);
+    c[ImGuiCol_Separator] = rgb(46, 51, 64);
+    c[ImGuiCol_Tab] = rgb(28, 31, 38);
+    c[ImGuiCol_TabHovered] = rgb(50, 57, 72);
+    c[ImGuiCol_TabSelected] = rgb(42, 48, 64);
+    c[ImGuiCol_TabSelectedOverline] = rgb(79, 140, 255);
+    c[ImGuiCol_TableHeaderBg] = rgb(33, 37, 46);
+    c[ImGuiCol_TableBorderStrong] = rgb(46, 51, 64);
+    c[ImGuiCol_TableBorderLight] = rgb(38, 42, 52);
+    c[ImGuiCol_TableRowBgAlt] = rgb(255, 255, 255, 6);
+    c[ImGuiCol_ScrollbarBg] = rgb(20, 22, 27);
+    c[ImGuiCol_ModalWindowDimBg] = rgb(0, 0, 0, 140);
+    style.ScaleAllSizes(scale);
+}
+
+struct Fonts {
+    ImFont* body = nullptr;
+    ImFont* title = nullptr;
+};
+
+Fonts loadFonts(float scale) {
+    ImGuiIO& io = ImGui::GetIO();
+    Fonts fonts;
+    const std::array<const char*, 5> bodyCandidates{
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    };
+    const std::array<const char*, 5> boldCandidates{
+        "C:\\Windows\\Fonts\\segoeuib.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    };
+    for (const char* path : bodyCandidates) {
+        std::error_code ec;
+        if (fs::exists(path, ec)) {
+            fonts.body = io.Fonts->AddFontFromFileTTF(path, 17.0f * scale);
+            if (fonts.body) break;
+        }
+    }
+    for (const char* path : boldCandidates) {
+        std::error_code ec;
+        if (fs::exists(path, ec)) {
+            fonts.title = io.Fonts->AddFontFromFileTTF(path, 24.0f * scale);
+            if (fonts.title) break;
+        }
+    }
+    if (!fonts.body) {
+        ImFontConfig cfg;
+        cfg.SizePixels = 15.0f * scale;
+        fonts.body = io.Fonts->AddFontDefault(&cfg);
+    }
+    if (!fonts.title) fonts.title = fonts.body;
+    io.FontDefault = fonts.body;
+    return fonts;
+}
+
+// ---------------------------------------------------------------------------
+// Small widgets
+// ---------------------------------------------------------------------------
+void helpMarker(const char* text) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::BeginItemTooltip()) {
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0f);
+        ImGui::TextUnformatted(text);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+}
+
+bool sliderPercent(const char* label, float* value, float minPct, float maxPct, const char* help = nullptr) {
+    float pct = *value * 100.0f;
+    const bool changed = ImGui::SliderFloat(label, &pct, minPct, maxPct, "%.0f%%", ImGuiSliderFlags_AlwaysClamp);
+    if (changed) *value = pct / 100.0f;
+    if (help) helpMarker(help);
+    return changed;
+}
+
+template <typename Enum, typename LabelFn>
+bool enumCombo(const char* label, Enum& value, LabelFn labelOf) {
+    bool changed = false;
+    const std::string preview(labelOf(value));
+    if (ImGui::BeginCombo(label, preview.c_str())) {
+        for (int i = 0; i < static_cast<int>(Enum::Count); ++i) {
+            const Enum option = static_cast<Enum>(i);
+            const bool selected = option == value;
+            const std::string text(labelOf(option));
+            if (ImGui::Selectable(text.c_str(), selected)) {
+                value = option;
+                changed = true;
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
+
+void statusDot(ImU32 color) {
+    const float r = ImGui::GetFontSize() * 0.28f;
+    // Callers align their text to frame padding, so centre the dot on the frame height.
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + r, p.y + ImGui::GetFrameHeight() * 0.5f), r, color, 16);
+    ImGui::Dummy(ImVec2(r * 2.0f, ImGui::GetTextLineHeight()));
+    ImGui::SameLine();
+}
+
+const char* shapeLabel(DeadzoneShape s) { return s == DeadzoneShape::Axial ? "Axial (per axis)" : "Radial (circle)"; }
+const char* triggerModeLabel(TriggerMode m) { return m == TriggerMode::HairTrigger ? "Hair trigger (digital)" : "Analog"; }
+const char* resistanceLabel(TriggerResistance r) { return r == TriggerResistance::Wall ? "Wall (feels like a trigger stop)" : "Off"; }
+
+// ---------------------------------------------------------------------------
+// Visualisations
+// ---------------------------------------------------------------------------
+void drawStickView(const char* id, float size, const StickSettings& s, float rawX, float rawY, float outX, float outY) {
+    ImGui::InvisibleButton(id, ImVec2(size, size));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p0 = ImGui::GetItemRectMin();
+    const ImVec2 c = p0 + ImVec2(size * 0.5f, size * 0.5f);
+    const float r = size * 0.44f;
+
+    dl->AddRectFilled(p0, p0 + ImVec2(size, size), kWell, 10.0f);
+    dl->AddCircleFilled(c, r, kPanel, 64);
+    dl->AddLine(c - ImVec2(r, 0), c + ImVec2(r, 0), kGrid);
+    dl->AddLine(c - ImVec2(0, r), c + ImVec2(0, r), kGrid);
+    if (s.shape == DeadzoneShape::Radial) {
+        dl->AddCircleFilled(c, r * s.deadzone, kDeadzone, 48);
+    } else {
+        const float d = r * s.deadzone;
+        dl->AddRectFilled(c - ImVec2(r, d), c + ImVec2(r, d), kDeadzone);
+        dl->AddRectFilled(c - ImVec2(d, r), c + ImVec2(d, r), kDeadzone);
+    }
+    dl->AddCircle(c, r * (1.0f - s.outerDeadzone), kGrid, 64, 1.0f);
+    dl->AddCircle(c, r, IM_COL32(70, 78, 96, 255), 64, 1.5f);
+
+    const ImVec2 raw = c + ImVec2(clamp11(rawX) * r, -clamp11(rawY) * r);
+    const ImVec2 out = c + ImVec2(clamp11(outX) * r, -clamp11(outY) * r);
+    dl->AddLine(c, out, kAccentSoft, 2.0f);
+    dl->AddCircleFilled(raw, size * 0.022f, kRaw, 16);
+    dl->AddCircleFilled(out, size * 0.035f, kAccent, 20);
+    dl->AddText(p0 + ImVec2(8, 6), kMuted, "raw");
+    dl->AddText(p0 + ImVec2(8, 6 + ImGui::GetTextLineHeight()), kAccent, "output");
+}
+
+// Response curve. In Custom mode the points can be dragged.
+bool drawCurveView(const char* id, float size, StickSettings& s, float rawMagnitude, int& dragIndex) {
+    ImGui::InvisibleButton(id, ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool active = ImGui::IsItemActive();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p0 = ImGui::GetItemRectMin();
+    const float pad = size * 0.08f;
+    const ImVec2 a = p0 + ImVec2(pad, pad);
+    const ImVec2 b = p0 + ImVec2(size - pad, size - pad);
+    const float w = b.x - a.x;
+    const float h = b.y - a.y;
+    auto toScreen = [&](float x, float y) { return ImVec2(a.x + x * w, b.y - y * h); };
+
+    dl->AddRectFilled(p0, p0 + ImVec2(size, size), kWell, 10.0f);
+    for (int i = 1; i < 4; ++i) {
+        const float t = static_cast<float>(i) / 4.0f;
+        dl->AddLine(toScreen(t, 0), toScreen(t, 1), kGrid);
+        dl->AddLine(toScreen(0, t), toScreen(1, t), kGrid);
+    }
+    dl->AddRect(a, b, kGrid);
+    dl->AddLine(toScreen(0, 0), toScreen(1, 1), IM_COL32(70, 78, 96, 255), 1.0f);
+
+    StickSettings plain = s;
+    plain.invertX = plain.invertY = false;
+    constexpr int kSamples = 96;
+    std::array<ImVec2, kSamples + 1> points{};
+    for (int i = 0; i <= kSamples; ++i) {
+        const float x = static_cast<float>(i) / kSamples;
+        points[static_cast<size_t>(i)] = toScreen(x, std::fabs(processStick(x, 0.0f, plain).x));
+    }
+    dl->AddPolyline(points.data(), static_cast<int>(points.size()), kAccent, ImDrawFlags_None, 2.5f);
+
+    const float m = clamp01(rawMagnitude);
+    dl->AddCircleFilled(toScreen(m, std::fabs(processStick(m, 0.0f, plain).x)), size * 0.025f, IM_COL32(255, 255, 255, 230), 16);
+    dl->AddText(p0 + ImVec2(8, 6), kMuted, "response");
+
+    bool changed = false;
+    if (s.curve == Curve::Custom) {
+        // Custom points live in "throw past the dead zone" space, drawn on the same axes.
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        if (ImGui::IsItemActivated()) {
+            dragIndex = -1;
+            float best = size * 0.06f;
+            for (size_t i = 0; i < s.customCurve.size(); ++i) {
+                const ImVec2 p = toScreen(s.customCurve[i].x, s.customCurve[i].y);
+                const float d = std::hypot(p.x - mouse.x, p.y - mouse.y);
+                if (d < best) {
+                    best = d;
+                    dragIndex = static_cast<int>(i);
+                }
+            }
+        }
+        if (active && dragIndex >= 0 && dragIndex < static_cast<int>(s.customCurve.size())) {
+            auto& pt = s.customCurve[static_cast<size_t>(dragIndex)];
+            const float lo = dragIndex > 0 ? s.customCurve[static_cast<size_t>(dragIndex) - 1].x + 0.02f : 0.02f;
+            const float hi = dragIndex + 1 < static_cast<int>(s.customCurve.size())
+                                 ? s.customCurve[static_cast<size_t>(dragIndex) + 1].x - 0.02f
+                                 : 0.98f;
+            pt.x = std::clamp((mouse.x - a.x) / w, lo, std::max(lo, hi));
+            pt.y = clamp01((b.y - mouse.y) / h);
+            changed = true;
+        }
+        if (!active) dragIndex = -1;
+        for (size_t i = 0; i < s.customCurve.size(); ++i) {
+            const ImVec2 p = toScreen(s.customCurve[i].x, s.customCurve[i].y);
+            const bool hot = static_cast<int>(i) == dragIndex;
+            dl->AddCircleFilled(p, size * (hot ? 0.035f : 0.028f), hot ? kWarn : IM_COL32(255, 255, 255, 255), 16);
+            dl->AddCircle(p, size * 0.035f, kAccent, 16, 1.5f);
+        }
+        if (hovered && !active) ImGui::SetTooltip("Drag the points to shape the curve");
+    }
+    return changed;
+}
+
+void drawTriggerView(const char* id, const TriggerSettings& t, float raw, float out) {
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float height = ImGui::GetFrameHeight() * 2.4f;
+    ImGui::InvisibleButton(id, ImVec2(width, height));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p0 = ImGui::GetItemRectMin();
+    const ImVec2 p1 = ImGui::GetItemRectMax();
+    dl->AddRectFilled(p0, p1, kWell, 8.0f);
+
+    const float pad = 8.0f;
+    const float x0 = p0.x + pad;
+    const float x1 = p1.x - pad;
+    const float span = x1 - x0;
+    const float mid = (p0.y + p1.y) * 0.5f;
+    auto x = [&](float v) { return x0 + clamp01(v) * span; };
+
+    dl->AddRectFilled(ImVec2(x(t.deadzone), p0.y + pad), ImVec2(x(t.maxRange), p1.y - pad), IM_COL32(79, 140, 255, 28), 4.0f);
+    dl->AddRectFilled(ImVec2(x0, p0.y + pad), ImVec2(x(raw), mid - 2), kRaw, 4.0f);
+    dl->AddRectFilled(ImVec2(x0, mid + 2), ImVec2(x(out), p1.y - pad), kAccent, 4.0f);
+    dl->AddLine(ImVec2(x(t.deadzone), p0.y + 4), ImVec2(x(t.deadzone), p1.y - 4), kBad, 2.0f);
+    dl->AddLine(ImVec2(x(t.maxRange), p0.y + 4), ImVec2(x(t.maxRange), p1.y - 4), kGood, 2.0f);
+    if (t.resistance == TriggerResistance::Wall) {
+        dl->AddLine(ImVec2(x(t.resistancePosition), p0.y + 2), ImVec2(x(t.resistancePosition), p1.y - 2), kWarn, 3.0f);
+    }
+    char label[48];
+    std::snprintf(label, sizeof(label), "raw %3.0f%%   out %3.0f%%", raw * 100.0f, out * 100.0f);
+    dl->AddText(ImVec2(x1 - ImGui::CalcTextSize(label).x, p0.y + pad), IM_COL32(230, 232, 238, 220), label);
+}
+
+// ---------------------------------------------------------------------------
+// Application UI
+// ---------------------------------------------------------------------------
+class App {
+public:
+    App(Engine& engine, const ConfigStore& store, Updater& updater, GuiOptions options, Fonts fonts)
+        : engine_(engine), store_(store), updater_(updater), cfg_(std::move(options.config)),
+          dataDir_(std::move(options.dataDir)), fonts_(fonts), notice_(std::move(options.startupWarning)) {
+        cfg_.normalize();
+        if (options.autoUpdate) updater_.check(true);
+    }
+
+    bool restartRequested() const { return restartRequested_; }
+
+    void frame(double now) {
+        status_ = engine_.status();
+        if (status_.revision != seenRevision_) {
+            // The controller switched profile / toggled remapping with an Fn combo.
+            cfg_.settings.activeProfile = status_.activeProfile;
+            cfg_.settings.enabled = status_.enabled;
+            seenRevision_ = status_.revision;
+            markDirty(now);
+        }
+
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(vp->WorkPos);
+        ImGui::SetNextWindowSize(vp->WorkSize);
+        ImGui::Begin("EdgePad", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+        changed_ = false;
+        drawHeader();
+        drawProfileBar();
+        drawBanner();
+        if (ImGui::BeginTabBar("tabs")) {
+            if (ImGui::BeginTabItem("Sticks")) {
+                drawSticksTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Triggers")) {
+                drawTriggersTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Buttons")) {
+                drawButtonsTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Settings")) {
+                drawSettingsTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Help")) {
+                drawHelpTab();
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+        ImGui::End();
+
+        if (changed_) {
+            cfg_.normalize();
+            engine_.updateConfig(cfg_, seenRevision_);
+            markDirty(now);
+        }
+        if (dirty_ && now - lastEdit_ > 0.75) save();
+    }
+
+    void save() {
+        std::string error;
+        if (store_.save(cfg_, &error)) {
+            dirty_ = false;
+            saveError_.clear();
+        } else {
+            saveError_ = error;
+            dirty_ = false;  // do not retry every frame; the next edit retries
+        }
+    }
+
+private:
+    Profile& profile() { return cfg_.active(); }
+    void markDirty(double now) {
+        dirty_ = true;
+        lastEdit_ = now;
+    }
+
+    // -- header ---------------------------------------------------------------
+    void drawHeader() {
+        ImGui::PushFont(fonts_.title);
+        ImGui::TextUnformatted("EdgePad");
+        ImGui::PopFont();
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("v%s", build::kVersion);
+
+        ImGui::SameLine(0.0f, 28.0f);
+        ImGui::AlignTextToFramePadding();
+        if (status_.connected) {
+            statusDot(kGood);
+            std::string text = status_.controllerName;
+            text += status_.connection == dualsense::Connection::Bluetooth ? "  ·  Bluetooth" : "  ·  USB";
+            if (status_.battery >= 0) {
+                text += "  ·  " + std::to_string(status_.battery) + "%";
+                if (status_.charging) text += " charging";
+            }
+            ImGui::TextUnformatted(text.c_str());
+        } else {
+            statusDot(kMuted);
+            ImGui::TextDisabled("Waiting for a DualSense or DualSense Edge...");
+        }
+
+        ImGui::SameLine(0.0f, 28.0f);
+        if (!status_.padName.empty()) {
+            statusDot(kGood);
+            ImGui::TextUnformatted(status_.padName.c_str());
+        } else if (cfg_.settings.output == OutputKind::None) {
+            statusDot(kMuted);
+            ImGui::TextDisabled("Monitor only");
+        } else if (!status_.padMessage.empty()) {
+            statusDot(kWarn);
+            ImGui::TextUnformatted("No virtual controller");
+            ImGui::SetItemTooltip("%s", status_.padMessage.c_str());
+        }
+        if (status_.connected && status_.reportRate > 0.0f) {
+            ImGui::SameLine(0.0f, 28.0f);
+            ImGui::TextDisabled("%.0f Hz", status_.reportRate);
+        }
+
+        const float toggleWidth = ImGui::CalcTextSize("Remapping on").x + ImGui::GetFrameHeight() * 2.0f;
+        const float toggleX = ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - toggleWidth;
+        // Right-align the toggle, or wrap it to the next line when the status text is too long.
+        if (ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + ImGui::GetStyle().ItemSpacing.x < toggleX) {
+            ImGui::SameLine(toggleX);
+        }
+        bool enabled = cfg_.settings.enabled;
+        if (ImGui::Checkbox(enabled ? "Remapping on" : "Remapping off", &enabled)) {
+            cfg_.settings.enabled = enabled;
+            changed_ = true;
+        }
+        ImGui::SetItemTooltip("Off = raw passthrough. Fn + Options toggles this from the controller.");
+        ImGui::Spacing();
+    }
+
+    // -- profiles -------------------------------------------------------------
+    void drawProfileBar() {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Profile");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 13.0f);
+        if (ImGui::BeginCombo("##profile", profile().name.c_str())) {
+            for (size_t i = 0; i < cfg_.profiles.size(); ++i) {
+                const Profile& p = cfg_.profiles[i];
+                std::string label = p.name;
+                if (p.hotkey) label += "   (Fn + " + std::string(buttonLabel(*p.hotkey)) + ")";
+                label += "##" + std::to_string(i);
+                const bool selected = static_cast<int>(i) == cfg_.settings.activeProfile;
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    cfg_.settings.activeProfile = static_cast<int>(i);
+                    changed_ = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(cfg_.profiles.size() >= kMaxProfiles);
+        if (ImGui::Button("New")) addProfile(Profile{}, "Profile " + std::to_string(cfg_.profiles.size() + 1));
+        ImGui::SameLine();
+        if (ImGui::Button("Duplicate")) addProfile(profile(), profile().name + " copy");
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Rename")) {
+            std::snprintf(renameBuffer_.data(), renameBuffer_.size(), "%s", profile().name.c_str());
+            ImGui::OpenPopup("Rename profile");
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(cfg_.profiles.size() <= 1);
+        if (ImGui::Button("Delete")) ImGui::OpenPopup("Delete profile");
+        ImGui::EndDisabled();
+
+        ImGui::SameLine(0.0f, 24.0f);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Fn +");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 7.0f);
+        const std::string hotkeyPreview = profile().hotkey ? std::string(buttonLabel(*profile().hotkey)) : "None";
+        if (ImGui::BeginCombo("##hotkey", hotkeyPreview.c_str())) {
+            if (ImGui::Selectable("None", !profile().hotkey)) {
+                profile().hotkey.reset();
+                changed_ = true;
+            }
+            for (Button b : kProfileHotkeys) {
+                if (ImGui::Selectable(std::string(buttonLabel(b)).c_str(), profile().hotkey == b)) {
+                    // Hotkeys are unique: steal it from any other profile.
+                    for (auto& other : cfg_.profiles) {
+                        if (other.hotkey == b) other.hotkey.reset();
+                    }
+                    profile().hotkey = b;
+                    changed_ = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip("Hold Fn and press this button on the controller to switch to this profile");
+
+        ImGui::SameLine(0.0f, 24.0f);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Lightbar");
+        ImGui::SameLine();
+        auto& lb = profile().lightbar;
+        float color[3] = {lb[0] / 255.0f, lb[1] / 255.0f, lb[2] / 255.0f};
+        if (ImGui::ColorEdit3("##lightbar", color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
+            for (size_t i = 0; i < 3; ++i) lb[i] = static_cast<uint8_t>(std::lround(clamp01(color[i]) * 255.0f));
+            changed_ = true;
+        }
+
+        if (ImGui::BeginPopupModal("Rename profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+            const bool enter = ImGui::InputText("##name", renameBuffer_.data(), renameBuffer_.size(),
+                                                ImGuiInputTextFlags_EnterReturnsTrue);
+            if (ImGui::Button("Save") || enter) {
+                if (renameBuffer_[0] != '\0') {
+                    profile().name = renameBuffer_.data();
+                    changed_ = true;
+                }
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+        if (ImGui::BeginPopupModal("Delete profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("Delete \"%s\"?", profile().name.c_str());
+            if (ImGui::Button("Delete")) {
+                cfg_.profiles.erase(cfg_.profiles.begin() + cfg_.settings.activeProfile);
+                cfg_.settings.activeProfile = std::max(0, cfg_.settings.activeProfile - 1);
+                changed_ = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+        ImGui::Spacing();
+    }
+
+    void addProfile(Profile p, std::string name) {
+        p.name = std::move(name);
+        p.hotkey.reset();
+        for (Button b : kProfileHotkeys) {
+            const bool used = std::any_of(cfg_.profiles.begin(), cfg_.profiles.end(), [&](const Profile& o) { return o.hotkey == b; });
+            if (!used) {
+                p.hotkey = b;
+                break;
+            }
+        }
+        cfg_.profiles.push_back(std::move(p));
+        cfg_.settings.activeProfile = static_cast<int>(cfg_.profiles.size()) - 1;
+        changed_ = true;
+    }
+
+    // -- notices / update banner ---------------------------------------------
+    void drawBanner() {
+        const UpdateStatus up = updater_.status();
+        auto banner = [&](ImU32 color, const std::string& text) {
+            ImGui::PushStyleColor(ImGuiCol_Text, color);
+            ImGui::TextWrapped("%s", text.c_str());
+            ImGui::PopStyleColor();
+        };
+        if (up.state == UpdateState::Available) {
+            banner(kAccent, up.message);
+            ImGui::SameLine();
+            if (Updater::canSelfUpdate()) {
+                if (ImGui::SmallButton("Install update")) updater_.install();
+            } else if (ImGui::SmallButton("Open release page")) {
+                openUrl(up.releaseUrl);
+            }
+        } else if (up.state == UpdateState::Downloading) {
+            banner(kAccent, up.message);
+        } else if (up.state == UpdateState::Installed) {
+            banner(kGood, up.message);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Restart now")) {
+                std::string error;
+                if (relaunch(error)) {
+                    restartRequested_ = true;
+                } else {
+                    notice_ = error;
+                }
+            }
+        }
+        if (!status_.padName.empty() || cfg_.settings.output == OutputKind::None) {
+            // nothing to warn about
+        } else if (status_.padError != PadError::None && !status_.padMessage.empty()) {
+#if defined(_WIN32)
+            if (status_.padError == PadError::DriverMissing) {
+                banner(kWarn, "Install the ViGEmBus driver so games can see the remapped controller.");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Get ViGEmBus")) openUrl(virtualPadDriverUrl());
+            } else {
+                banner(kWarn, status_.padMessage);
+            }
+#else
+            banner(kWarn, "No virtual controller: " + status_.padMessage);
+#endif
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Retry")) engine_.retryVirtualPad();
+        }
+        if (!notice_.empty()) {
+            banner(kWarn, notice_);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Dismiss")) notice_.clear();
+        }
+        if (!saveError_.empty()) banner(kBad, "Could not save settings: " + saveError_);
+    }
+
+    // -- sticks ---------------------------------------------------------------
+    void drawStickColumn(const char* title, StickSettings& s, float rawX, float rawY, float outX, float outY, int& dragIndex) {
+        ImGui::PushID(title);
+        ImGui::SeparatorText(title);
+        const float avail = ImGui::GetContentRegionAvail().x;
+        const float size = std::min(ImGui::GetFontSize() * 13.0f, (avail - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
+        drawStickView("stick", size, s, rawX, rawY, outX, outY);
+        ImGui::SameLine();
+        changed_ |= drawCurveView("curve", size, s, std::hypot(rawX, rawY), dragIndex);
+
+        ImGui::PushItemWidth(-ImGui::GetFontSize() * 9.5f);
+        changed_ |= sliderPercent("Dead zone", &s.deadzone, 0, 40,
+                                  "Stick movement inside this circle is ignored. Raise it if the stick drifts.");
+        changed_ |= sliderPercent("Outer dead zone", &s.outerDeadzone, 0, 30,
+                                  "The outer edge that already counts as full deflection.");
+        changed_ |= sliderPercent("Anti-dead zone", &s.antiDeadzone, 0, 60,
+                                  "Jumps the output past the game's own dead zone so tiny movements register. "
+                                  "Set it to roughly the game's dead zone (often 10-25%).");
+        changed_ |= enumCombo("Response curve", s.curve, curveLabel);
+        ImGui::BeginDisabled(s.curve == Curve::Default || s.curve == Curve::Custom);
+        changed_ |= sliderPercent("Curve strength", &s.curveIntensity, 0, 100);
+        ImGui::EndDisabled();
+
+        float rc = s.rcFilter * 100.0f;
+        const char* rcFormat = rc > 0.5f ? "%+.0f stabilizer" : (rc < -0.5f ? "%+.0f jitter" : "off");
+        if (ImGui::SliderFloat("RC filter", &rc, -100.0f, 100.0f, rcFormat, ImGuiSliderFlags_AlwaysClamp)) {
+            s.rcFilter = std::abs(rc) < 0.5f ? 0.0f : rc / 100.0f;
+            changed_ = true;
+        }
+        helpMarker(
+            "GameSir style RC filter.\n\n"
+            "Positive = stabilizer: an RC low-pass filter that removes micro-jitter so aim feels heavier and "
+            "steadier (adds a few ms of smoothing at high values).\n\n"
+            "Negative = jitter mode: adds a microscopic alternating wobble while the stick is moved, which "
+            "keeps some games' aim assist engaged. Some online games treat this as aim-assist abuse - check the "
+            "rules of the game you play.\n\nDouble-click the slider to type an exact value; Ctrl+click works too.");
+
+        changed_ |= enumCombo("Dead zone shape", s.shape, shapeLabel);
+        changed_ |= ImGui::Checkbox("Invert X", &s.invertX);
+        ImGui::SameLine();
+        changed_ |= ImGui::Checkbox("Invert Y", &s.invertY);
+        if (s.curve == Curve::Custom) {
+            ImGui::SameLine();
+            if (ImGui::Button("Reset curve")) {
+                s.customCurve = StickSettings{}.customCurve;
+                changed_ = true;
+            }
+        }
+        ImGui::PopItemWidth();
+        ImGui::PopID();
+    }
+
+    void drawSticksTab() {
+        Profile& p = profile();
+        const InputState& in = status_.input;
+        const OutputState& out = status_.output;
+        // Output sticks are shown for the stick they come from, so swapping stays readable.
+        const float lOutX = p.swapSticks ? out.rx : out.lx;
+        const float lOutY = p.swapSticks ? out.ry : out.ly;
+        const float rOutX = p.swapSticks ? out.lx : out.rx;
+        const float rOutY = p.swapSticks ? out.ly : out.ry;
+        if (ImGui::BeginTable("sticks", 2, ImGuiTableFlags_SizingStretchSame)) {
+            ImGui::TableNextColumn();
+            drawStickColumn("Left stick", p.leftStick, in.lx, in.ly, lOutX, lOutY, leftDrag_);
+            ImGui::TableNextColumn();
+            drawStickColumn("Right stick", p.rightStick, in.rx, in.ry, rOutX, rOutY, rightDrag_);
+            ImGui::EndTable();
+        }
+        changed_ |= ImGui::Checkbox("Swap left and right sticks", &p.swapSticks);
+    }
+
+    // -- triggers -------------------------------------------------------------
+    void drawTriggerColumn(const char* title, TriggerSettings& t, float raw, float out) {
+        ImGui::PushID(title);
+        ImGui::SeparatorText(title);
+        drawTriggerView("bar", t, raw, out);
+        ImGui::PushItemWidth(-ImGui::GetFontSize() * 11.0f);
+        changed_ |= sliderPercent("Dead zone (start)", &t.deadzone, 0, 90, "Trigger travel ignored at the start.");
+        changed_ |= sliderPercent("Trigger stop (end)", &t.maxRange, 5, 100,
+                                  "Where the trigger already counts as fully pressed. Short values give "
+                                  "DualSense Edge style short trigger pulls.");
+        changed_ |= sliderPercent("Anti-dead zone", &t.antiDeadzone, 0, 90,
+                                  "Minimum output as soon as the trigger leaves its dead zone.");
+        changed_ |= enumCombo("Mode", t.mode, triggerModeLabel);
+        changed_ |= enumCombo("Adaptive resistance", t.resistance, resistanceLabel);
+        if (t.resistance == TriggerResistance::Wall) {
+            changed_ |= sliderPercent("Wall position", &t.resistancePosition, 0, 90,
+                                      "Where the adaptive trigger starts pushing back.");
+            changed_ |= ImGui::SliderInt("Wall strength", &t.resistanceStrength, 1, 8, "%d", ImGuiSliderFlags_AlwaysClamp);
+        }
+        ImGui::PopItemWidth();
+        ImGui::PopID();
+    }
+
+    void drawTriggersTab() {
+        Profile& p = profile();
+        if (ImGui::BeginTable("triggers", 2, ImGuiTableFlags_SizingStretchSame)) {
+            ImGui::TableNextColumn();
+            drawTriggerColumn("L2", p.l2, status_.input.l2, status_.output.l2);
+            ImGui::TableNextColumn();
+            drawTriggerColumn("R2", p.r2, status_.input.r2, status_.output.r2);
+            ImGui::EndTable();
+        }
+        ImGui::Spacing();
+        ImGui::TextDisabled("Tip: put the resistance wall at the same spot as the trigger stop to feel exactly where the");
+        ImGui::TextDisabled("shortened trigger fires - the software version of the DualSense Edge trigger stops.");
+    }
+
+    // -- buttons --------------------------------------------------------------
+    void drawButtonRow(Button source) {
+        ImGui::PushID(static_cast<int>(source));
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        statusDot(has(status_.input.buttons, source) ? kAccent : kGrid);
+        ImGui::TextUnformatted(std::string(buttonLabel(source)).c_str());
+        ImGui::TableNextColumn();
+        if (fnSourceMask(cfg_.settings.fnMode) & bit(source)) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("Fn (profile switching)");
+        } else {
+            auto& target = profile().buttons[static_cast<size_t>(index(source))];
+            const std::string preview = target ? std::string(buttonLabel(*target)) : "Disabled";
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::BeginCombo("##target", preview.c_str())) {
+                if (ImGui::Selectable("Disabled", !target)) {
+                    target.reset();
+                    changed_ = true;
+                }
+                for (int i = 0; i < kButtonCount; ++i) {
+                    const Button option = buttonAt(i);
+                    if (!isRemapTarget(option)) continue;
+                    if (ImGui::Selectable(std::string(buttonLabel(option)).c_str(), target == option)) {
+                        target = option;
+                        changed_ = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        }
+        ImGui::PopID();
+    }
+
+    void drawButtonGroup(const char* title, std::initializer_list<Button> buttons) {
+        ImGui::SeparatorText(title);
+        if (ImGui::BeginTable(title, 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn("Sends", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+            for (Button b : buttons) drawButtonRow(b);
+            ImGui::EndTable();
+        }
+    }
+
+    void drawButtonsTab() {
+        if (ImGui::BeginTable("buttonColumns", 2, ImGuiTableFlags_SizingStretchSame)) {
+            ImGui::TableNextColumn();
+            drawButtonGroup("Back buttons", {Button::PaddleLeft, Button::PaddleRight});
+            drawButtonGroup("Face buttons", {Button::Cross, Button::Circle, Button::Square, Button::Triangle});
+            drawButtonGroup("Shoulders and sticks", {Button::L1, Button::R1, Button::L3, Button::R3});
+            ImGui::TableNextColumn();
+            drawButtonGroup("Edge Fn buttons", {Button::FnLeft, Button::FnRight});
+            drawButtonGroup("D-pad", {Button::DpadUp, Button::DpadDown, Button::DpadLeft, Button::DpadRight});
+            drawButtonGroup("System", {Button::Create, Button::Options, Button::PS, Button::Touchpad, Button::Mute});
+            ImGui::EndTable();
+        }
+        ImGui::Spacing();
+        if (ImGui::Button("Reset buttons to default")) {
+            profile().buttons = defaultButtonMap();
+            changed_ = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("L2 / R2 targets press the trigger fully. The back buttons need a DualSense Edge.");
+    }
+
+    // -- settings -------------------------------------------------------------
+    void drawSettingsTab() {
+        ImGui::PushItemWidth(ImGui::GetFontSize() * 18.0f);
+        ImGui::SeparatorText("Controller");
+        changed_ |= enumCombo("Virtual controller", cfg_.settings.output, outputKindLabel);
+        helpMarker("What games see. Xbox 360 works with almost every PC game. DualShock 4 shows PlayStation "
+                   "button prompts in games that support it.");
+        changed_ |= enumCombo("Fn button", cfg_.settings.fnMode, fnModeLabel);
+        helpMarker("Hold Fn and press Cross / Circle / Square / Triangle to switch profiles, or Options to toggle "
+                   "remapping. A regular DualSense can use the Mute button as Fn.");
+        changed_ |= ImGui::Checkbox("Forward game rumble to the controller", &cfg_.settings.rumble);
+        ImGui::PopItemWidth();
+        if (status_.padError == PadError::DriverMissing || status_.padError == PadError::Failed ||
+            status_.padError == PadError::PermissionDenied) {
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kWarn), "%s", status_.padMessage.c_str());
+#if defined(_WIN32)
+            if (ImGui::Button("Get the ViGEmBus driver")) openUrl(virtualPadDriverUrl());
+            ImGui::SameLine();
+#endif
+            if (ImGui::Button("Retry now")) engine_.retryVirtualPad();
+        }
+
+        ImGui::SeparatorText("Updates");
+        changed_ |= ImGui::Checkbox("Install updates automatically", &cfg_.settings.autoUpdate);
+        helpMarker("On start EdgePad checks the GitHub releases of this project, downloads a newer build, verifies "
+                   "its SHA-256 checksum and swaps it in. The new version runs the next time you start EdgePad.");
+        const UpdateStatus up = updater_.status();
+        ImGui::BeginDisabled(updater_.busy());
+        if (ImGui::Button("Check for updates")) updater_.check(false);
+        ImGui::EndDisabled();
+        if (up.state == UpdateState::Available && Updater::canSelfUpdate()) {
+            ImGui::SameLine();
+            if (ImGui::Button("Install")) updater_.install();
+        }
+        if (!up.message.empty()) {
+            ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(up.state == UpdateState::Failed ? kBad : kMuted), "%s",
+                               up.message.c_str());
+        }
+        if (!Updater::canSelfUpdate()) ImGui::TextDisabled("Development build: self-update is disabled.");
+
+        ImGui::SeparatorText("Portable data");
+        ImGui::TextDisabled("Profiles and settings are stored next to the app, so the folder can live on a USB stick.");
+        ImGui::TextUnformatted(toUtf8(store_.path()).c_str());
+        if (ImGui::Button("Open data folder")) openInFileBrowser(dataDir_);
+        ImGui::SameLine();
+        if (ImGui::Button("Restore default profiles")) ImGui::OpenPopup("Restore defaults");
+        if (ImGui::BeginPopupModal("Restore defaults", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted("Replace all profiles with the built-in ones?");
+            if (ImGui::Button("Replace")) {
+                cfg_.profiles = Config::defaults().profiles;
+                cfg_.settings.activeProfile = 0;
+                changed_ = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+    }
+
+    void drawHelpTab() {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::SeparatorText("Getting started (Windows)");
+        ImGui::BulletText("Install ViGEmBus once: it lets EdgePad create the virtual controller games see.");
+        ImGui::BulletText("Recommended: install HidHide and allow EdgePad in it, so games only see the virtual "
+                          "controller and never get double input from the real one.");
+        ImGui::BulletText("Plug in the DualSense / DualSense Edge over USB or pair it over Bluetooth. "
+                          "EdgePad connects automatically.");
+        ImGui::BulletText("If Steam is running, turn off Steam Input's PlayStation support for the virtual "
+                          "controller to keep one layer of remapping.");
+        ImGui::SeparatorText("Controller shortcuts");
+        ImGui::BulletText("Fn + Cross / Circle / Square / Triangle: switch to the profile using that hotkey.");
+        ImGui::BulletText("Fn + Options: toggle remapping (raw passthrough) on and off.");
+        ImGui::BulletText("Fn is the Edge's Fn buttons, or Mute on a regular DualSense (change it in Settings).");
+        ImGui::BulletText("The player LEDs show the active profile slot, the lightbar shows its colour.");
+        ImGui::SeparatorText("What the settings do");
+        ImGui::BulletText("Dead zone / anti-dead zone: ignore drift, then jump past the game's own dead zone.");
+        ImGui::BulletText("Curves: Quick, Precise, Steady, Digital and Dynamic mirror the DualSense Edge presets; "
+                          "Custom lets you drag your own curve.");
+        ImGui::BulletText("RC filter: positive values smooth the stick (stabilizer), negative values add jitter.");
+        ImGui::BulletText("Trigger stop + resistance wall: shorter trigger pulls like the Edge's hardware stops.");
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+        const std::string repoUrl = std::string("https://github.com/") + build::kRepository;
+        if (ImGui::Button("Project page")) openUrl(repoUrl);
+        ImGui::SameLine();
+        if (ImGui::Button("ViGEmBus")) openUrl("https://github.com/nefarius/ViGEmBus/releases/latest");
+        ImGui::SameLine();
+        if (ImGui::Button("HidHide")) openUrl("https://github.com/nefarius/HidHide/releases/latest");
+    }
+
+    Engine& engine_;
+    const ConfigStore& store_;
+    Updater& updater_;
+    Config cfg_;
+    fs::path dataDir_;
+    Fonts fonts_;
+    EngineStatus status_;
+    uint64_t seenRevision_ = 0;
+    bool changed_ = false;
+    bool dirty_ = false;
+    double lastEdit_ = 0.0;
+    bool restartRequested_ = false;
+    int leftDrag_ = -1;
+    int rightDrag_ = -1;
+    std::array<char, 64> renameBuffer_{};
+    std::string notice_;
+    std::string saveError_;
+};
+
+void glfwErrorCallback(int code, const char* description) { std::fprintf(stderr, "GLFW error %d: %s\n", code, description); }
+
+}  // namespace
+
+int runGui(Engine& engine, const ConfigStore& store, Updater& updater, GuiOptions options) {
+    glfwSetErrorCallback(glfwErrorCallback);
+    if (!glfwInit()) return 2;
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
+    GLFWwindow* window = glfwCreateWindow(1240, 800, "EdgePad", nullptr, nullptr);
+    if (window == nullptr) {
+        glfwTerminate();
+        return 2;
+    }
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(1);
+
+    float scaleX = 1.0f, scaleY = 1.0f;
+    glfwGetWindowContentScale(window, &scaleX, &scaleY);
+    const float scale = std::clamp(std::max(scaleX, scaleY), 1.0f, 3.0f);
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;  // portable: never write imgui.ini next to the app
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    const Fonts fonts = loadFonts(scale);
+    applyTheme(scale);
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 130");
+
+    int exitCode = 0;
+    {
+        App app(engine, store, updater, std::move(options), fonts);
+        while (!glfwWindowShouldClose(window)) {
+            // Keep the UI cheap while gaming: full rate only when focused and visible.
+            const bool focused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
+            const bool iconified = glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE;
+            if (iconified) {
+                glfwWaitEventsTimeout(0.25);
+                continue;
+            }
+            if (focused) {
+                glfwPollEvents();
+            } else {
+                glfwWaitEventsTimeout(1.0 / 15.0);
+            }
+
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+            app.frame(glfwGetTime());
+            ImGui::Render();
+
+            int width = 0, height = 0;
+            glfwGetFramebufferSize(window, &width, &height);
+            glViewport(0, 0, width, height);
+            glClearColor(20 / 255.0f, 22 / 255.0f, 27 / 255.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+            glfwSwapBuffers(window);
+
+            if (app.restartRequested()) glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+        app.save();
+    }
+
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    glfwDestroyWindow(window);
+    glfwTerminate();
+    return exitCode;
+}
+
+}  // namespace edgepad

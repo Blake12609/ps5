@@ -1,0 +1,257 @@
+#include "app/engine.hpp"
+
+#include <chrono>
+#include <cmath>
+#include <iterator>
+#include <memory>
+
+#include "core/pipeline.hpp"
+#include "platform/hid_device.hpp"
+
+namespace edgepad {
+
+using Clock = std::chrono::steady_clock;
+
+namespace {
+
+// Smooth, repeating fake input used by --demo.
+InputState simulatedInput(float t) {
+    InputState in;
+    const float radius = 0.5f + 0.5f * std::sin(t * 0.7f);
+    in.lx = radius * std::cos(t * 1.3f);
+    in.ly = radius * std::sin(t * 1.3f);
+    in.rx = 0.35f * std::sin(t * 0.9f);
+    in.ry = 0.2f * std::sin(t * 1.8f);
+    in.l2 = 0.5f + 0.5f * std::sin(t * 1.1f);
+    in.r2 = std::fabs(std::fmod(t * 0.4f, 2.0f) - 1.0f);
+    constexpr Button kCycle[] = {Button::Cross, Button::Circle, Button::PaddleLeft, Button::Square,
+                                 Button::Triangle, Button::PaddleRight, Button::L1, Button::R1};
+    const int slot = static_cast<int>(t / 0.6f) % static_cast<int>(std::size(kCycle));
+    in.buttons = bit(kCycle[slot]);
+    in.battery = 80;
+    return in;
+}
+
+}  // namespace
+
+Engine::Engine(Config config, bool demo) : shared_(std::move(config)), demo_(demo) {
+    shared_.normalize();
+    status_.activeProfile = shared_.settings.activeProfile;
+    status_.enabled = shared_.settings.enabled;
+}
+
+Engine::~Engine() { stop(); }
+
+void Engine::start() {
+    if (thread_.joinable()) return;
+    stop_ = false;
+    thread_ = std::thread([this] { run(); });
+}
+
+void Engine::stop() {
+    stop_ = true;
+    if (thread_.joinable()) thread_.join();
+}
+
+void Engine::updateConfig(const Config& config, uint64_t seenRevision) {
+    std::lock_guard lock(mutex_);
+    const Settings engineSettings = shared_.settings;
+    shared_ = config;
+    if (seenRevision != status_.revision) {
+        shared_.settings.activeProfile = engineSettings.activeProfile;
+        shared_.settings.enabled = engineSettings.enabled;
+    }
+    shared_.normalize();
+    pendingConfig_ = true;
+}
+
+Config Engine::config() const {
+    std::lock_guard lock(mutex_);
+    return shared_;
+}
+
+EngineStatus Engine::status() const {
+    std::lock_guard lock(mutex_);
+    return status_;
+}
+
+void Engine::retryVirtualPad() { retryPad_ = true; }
+
+void Engine::run() {
+    Config cfg = config();
+    DualSenseDevice device;
+    Pipeline pipeline;
+
+    std::unique_ptr<VirtualPad> pad;
+    OutputKind padKind = OutputKind::None;
+    OutputKind lastAttemptKind = OutputKind::Count;
+    Clock::time_point nextPadAttempt{};
+    Clock::time_point nextScan{};
+    OutputState lastSent;
+    bool forceSend = true;
+
+    const Clock::time_point demoStart = Clock::now();
+    Clock::time_point lastReport = Clock::now();
+    Clock::time_point rateWindowStart = Clock::now();
+    int reportsInWindow = 0;
+
+    const RumbleCallback onRumble = [this](uint8_t large, uint8_t small) {
+        rumble_ = static_cast<uint16_t>((large << 8) | small);
+    };
+
+    while (!stop_) {
+        {
+            std::lock_guard lock(mutex_);
+            if (pendingConfig_) {
+                cfg = shared_;
+                pendingConfig_ = false;
+            }
+        }
+        const Clock::time_point now = Clock::now();
+
+        // Controller connection.
+        if (demo_ && !status_.connected) {
+            std::lock_guard lock(mutex_);
+            status_.connected = true;
+            status_.controllerName = "Simulated DualSense Edge (demo)";
+            status_.connection = dualsense::Connection::Usb;
+        }
+        if (!demo_ && !device.isOpen()) {
+            if (pad) {
+                pad.reset();
+                rumble_ = 0;
+            }
+            {
+                std::lock_guard lock(mutex_);
+                status_.connected = false;
+                status_.reportRate = 0.0f;
+                status_.input = {};
+                status_.output = {};
+                status_.padName.clear();
+            }
+            if (now >= nextScan) {
+                nextScan = now + std::chrono::seconds(1);
+                for (const auto& info : enumerateControllers()) {
+                    std::string error;
+                    if (device.open(info, error)) {
+                        pipeline.reset();
+                        forceSend = true;
+                        lastReport = Clock::now();
+                        lastAttemptKind = OutputKind::Count;
+                        std::lock_guard lock(mutex_);
+                        status_.connected = true;
+                        status_.controllerName = dualsense::productName(info.productId);
+                        break;
+                    }
+                }
+            }
+            if (!device.isOpen()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                continue;
+            }
+        }
+
+        // Virtual controller.
+        const OutputKind wanted = cfg.settings.output;
+        if (pad && padKind != wanted) {
+            pad.reset();
+            rumble_ = 0;
+        }
+        if (!pad && wanted != OutputKind::None &&
+            (wanted != lastAttemptKind || now >= nextPadAttempt || retryPad_.exchange(false))) {
+            lastAttemptKind = wanted;
+            PadCreateResult created = createVirtualPad(wanted, onRumble);
+            std::lock_guard lock(mutex_);
+            if (created.pad) {
+                pad = std::move(created.pad);
+                padKind = wanted;
+                forceSend = true;
+                status_.padName = pad->name();
+                status_.padMessage.clear();
+                status_.padError = PadError::None;
+            } else {
+                nextPadAttempt = now + std::chrono::seconds(5);
+                status_.padName.clear();
+                status_.padMessage = created.message;
+                status_.padError = created.error;
+            }
+        }
+        if (wanted == OutputKind::None) {
+            std::lock_guard lock(mutex_);
+            status_.padName.clear();
+            status_.padMessage = "Monitor only: no virtual controller";
+            status_.padError = PadError::None;
+        }
+
+        // Controller input.
+        InputState input;
+        auto result = DualSenseDevice::ReadResult::Data;
+        if (demo_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(4));
+            input = simulatedInput(std::chrono::duration<float>(Clock::now() - demoStart).count());
+        } else {
+            result = device.read(input, 20);
+        }
+        if (result == DualSenseDevice::ReadResult::Error) {
+            device.close();
+            continue;
+        }
+        if (result == DualSenseDevice::ReadResult::Data) {
+            const Clock::time_point t = Clock::now();
+            const float dt = std::chrono::duration<float>(t - lastReport).count();
+            lastReport = t;
+
+            PipelineEvents events;
+            const OutputState output = pipeline.process(input, cfg, dt, &events);
+
+            if (pad && (forceSend || output != lastSent)) {
+                if (pad->send(output)) {
+                    lastSent = output;
+                    forceSend = false;
+                } else {
+                    pad.reset();
+                    rumble_ = 0;
+                    nextPadAttempt = t + std::chrono::seconds(2);
+                    std::lock_guard lock(mutex_);
+                    status_.padName.clear();
+                    status_.padMessage = "Virtual controller was removed";
+                }
+            }
+
+            ++reportsInWindow;
+            const float window = std::chrono::duration<float>(t - rateWindowStart).count();
+            std::lock_guard lock(mutex_);
+            if (window >= 1.0f) {
+                status_.reportRate = static_cast<float>(reportsInWindow) / window;
+                reportsInWindow = 0;
+                rateWindowStart = t;
+            }
+            if (events.profileChanged || events.enabledChanged) {
+                shared_.settings.activeProfile = cfg.settings.activeProfile;
+                shared_.settings.enabled = cfg.settings.enabled;
+                ++status_.revision;
+            }
+            status_.connected = true;
+            if (!demo_) status_.connection = device.connection();
+            status_.battery = input.battery;
+            status_.charging = input.charging;
+            status_.input = input;
+            status_.output = output;
+            status_.activeProfile = cfg.settings.activeProfile;
+            status_.enabled = cfg.settings.enabled;
+        }
+
+        // Lightbar, player LEDs, adaptive triggers and rumble back to the controller.
+        const uint16_t rumble = pad ? rumble_.load() : 0;
+        device.sendEffects(effectsForConfig(cfg, static_cast<uint8_t>(rumble >> 8), static_cast<uint8_t>(rumble & 0xFF)));
+    }
+
+    pad.reset();
+    // Leave the controller in a neutral state: no trigger resistance, no rumble.
+    dualsense::Effects neutral;
+    neutral.lightbar = {0, 0, 64};
+    device.sendEffects(neutral);
+    device.close();
+}
+
+}  // namespace edgepad

@@ -1,0 +1,15 @@
+# Build output
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+/dist/
+
+# Portable data folder created next to the app
+EdgePad-data/
+
+# Editors
+/.vs/
+/.vscode/
+/.idea/
+*.user
