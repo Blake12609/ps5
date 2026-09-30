@@ -24,6 +24,14 @@ template <>
 std::string_view enumId(TriggerMode v) { return v == TriggerMode::HairTrigger ? "hair" : "analog"; }
 template <>
 std::string_view enumId(TriggerResistance v) { return v == TriggerResistance::Wall ? "wall" : "off"; }
+template <>
+std::string_view enumId(TouchpadZones v) { return touchpadZonesId(v); }
+template <>
+std::string_view enumId(ZoneTrigger v) { return zoneTriggerId(v); }
+template <>
+std::string_view enumId(GyroActivation v) { return gyroActivationId(v); }
+template <>
+std::string_view enumId(GyroAxis v) { return gyroAxisId(v); }
 
 template <typename Enum>
 void readEnum(const json& j, const char* key, Enum& out) {
@@ -111,6 +119,8 @@ json triggerToJson(const TriggerSettings& t) {
         {"resistance_position", t.resistancePosition},
         {"resistance_strength", t.resistanceStrength},
         {"hair_reset_distance", t.hairResetDistance},
+        {"turbo", t.turbo},
+        {"turbo_ms", t.turboIntervalMs},
     };
 }
 
@@ -123,16 +133,128 @@ void triggerFromJson(const json& j, TriggerSettings& t) {
     readFloat(j, "resistance_position", t.resistancePosition);
     readInt(j, "resistance_strength", t.resistanceStrength);
     readFloat(j, "hair_reset_distance", t.hairResetDistance);
+    readBool(j, "turbo", t.turbo);
+    readInt(j, "turbo_ms", t.turboIntervalMs);
 }
 
-json profileToJson(const Profile& p) {
-    json buttons = json::object();
+// Binding target as text: "cross", "none", "inherit", "key:space", "key:mouse_left".
+std::string bindingTarget(const Binding& b) {
+    switch (b.kind) {
+        case Binding::Kind::Inherit: return "inherit";
+        case Binding::Kind::Disabled: return "none";
+        case Binding::Kind::Button: return std::string(buttonId(b.button));
+        case Binding::Kind::Key: return "key:" + std::string(keyId(b.key));
+    }
+    return "none";
+}
+
+std::optional<Binding> bindingFromTarget(const std::string& text) {
+    if (text == "inherit") return Binding::inherit();
+    if (text == "none") return Binding::disabled();
+    if (text.rfind("key:", 0) == 0) {
+        if (auto k = keyFromId(std::string_view(text).substr(4))) return Binding::toKey(*k);
+        return std::nullopt;
+    }
+    if (auto b = buttonFromId(text)) return Binding::toButton(*b);
+    return std::nullopt;
+}
+
+// Plain string when there are no extras, otherwise {"to": ..., "toggle": ..., "turbo": ..., "turbo_ms": ...}.
+json bindingToJson(const Binding& b) {
+    if (!b.toggle && !b.turbo) return bindingTarget(b);
+    json j = {{"to", bindingTarget(b)}};
+    if (b.toggle) j["toggle"] = true;
+    if (b.turbo) {
+        j["turbo"] = true;
+        j["turbo_ms"] = b.turboIntervalMs;
+    }
+    return j;
+}
+
+std::optional<Binding> bindingFromJson(const json& j) {
+    if (j.is_string()) return bindingFromTarget(j.get<std::string>());
+    if (!j.is_object()) return std::nullopt;
+    auto to = j.find("to");
+    if (to == j.end() || !to->is_string()) return std::nullopt;
+    auto b = bindingFromTarget(to->get<std::string>());
+    if (!b) return std::nullopt;
+    readBool(j, "toggle", b->toggle);
+    readBool(j, "turbo", b->turbo);
+    readInt(j, "turbo_ms", b->turboIntervalMs);
+    return b;
+}
+
+json bindingMapToJson(const BindingMap& map, bool skipInherit) {
+    json out = json::object();
     for (int i = 0; i < kButtonCount; ++i) {
         const Button src = buttonAt(i);
         if (!isRemapSource(src)) continue;
-        const auto& target = p.buttons[static_cast<size_t>(i)];
-        buttons[std::string(buttonId(src))] = target ? std::string(buttonId(*target)) : std::string("none");
+        const Binding& b = map[static_cast<size_t>(i)];
+        if (skipInherit && b.kind == Binding::Kind::Inherit) continue;
+        out[std::string(buttonId(src))] = bindingToJson(b);
     }
+    return out;
+}
+
+void bindingMapFromJson(const json& j, BindingMap& map) {
+    for (const auto& [key, value] : j.items()) {
+        const auto src = buttonFromId(key);
+        if (!src || !isRemapSource(*src)) continue;
+        if (auto b = bindingFromJson(value)) {
+            map[static_cast<size_t>(index(*src))] = *b;
+        } else {
+            map[static_cast<size_t>(index(*src))] = Binding::disabled();
+        }
+    }
+}
+
+json gyroToJson(const GyroSettings& g) {
+    return {
+        {"activation", enumId(g.activation)},
+        {"button", std::string(buttonId(g.button))},
+        {"sensitivity", g.sensitivity},
+        {"vertical_ratio", g.verticalRatio},
+        {"horizontal_axis", enumId(g.horizontalAxis)},
+        {"deadzone", g.deadzone},
+        {"smoothing", g.smoothing},
+        {"anti_deadzone", g.antiDeadzone},
+        {"invert_x", g.invertX},
+        {"invert_y", g.invertY},
+    };
+}
+
+void gyroFromJson(const json& j, GyroSettings& g) {
+    readEnum(j, "activation", g.activation);
+    if (auto it = j.find("button"); it != j.end() && it->is_string()) {
+        if (auto b = buttonFromId(it->get<std::string>())) g.button = *b;
+    }
+    readFloat(j, "sensitivity", g.sensitivity);
+    readFloat(j, "vertical_ratio", g.verticalRatio);
+    readEnum(j, "horizontal_axis", g.horizontalAxis);
+    readFloat(j, "deadzone", g.deadzone);
+    readFloat(j, "smoothing", g.smoothing);
+    readFloat(j, "anti_deadzone", g.antiDeadzone);
+    readBool(j, "invert_x", g.invertX);
+    readBool(j, "invert_y", g.invertY);
+}
+
+template <size_t N>
+json floats(const std::array<float, N>& values) {
+    json out = json::array();
+    for (float v : values) out.push_back(v);
+    return out;
+}
+
+template <size_t N>
+void readFloats(const json& j, const char* key, std::array<float, N>& out) {
+    auto it = j.find(key);
+    if (it == j.end() || !it->is_array() || it->size() != N) return;
+    for (size_t i = 0; i < N; ++i) {
+        if ((*it)[i].is_number()) out[i] = (*it)[i].template get<float>();
+    }
+}
+
+json profileToJson(const Profile& p) {
     return {
         {"name", p.name},
         {"hotkey", p.hotkey ? json(std::string(buttonId(*p.hotkey))) : json(nullptr)},
@@ -142,7 +264,12 @@ json profileToJson(const Profile& p) {
         {"right_stick", stickToJson(p.rightStick)},
         {"l2", triggerToJson(p.l2)},
         {"r2", triggerToJson(p.r2)},
-        {"buttons", buttons},
+        {"buttons", bindingMapToJson(p.buttons, false)},
+        {"shift_button", p.shiftButton ? json(std::string(buttonId(*p.shiftButton))) : json(nullptr)},
+        {"shift_buttons", bindingMapToJson(p.shiftButtons, true)},
+        {"touchpad_zones", enumId(p.touchpadZones)},
+        {"zone_trigger", enumId(p.zoneTrigger)},
+        {"gyro", gyroToJson(p.gyro)},
     };
 }
 
@@ -166,14 +293,14 @@ Profile profileFromJson(const json& j) {
     if (const json* c = child(j, "right_stick")) stickFromJson(*c, p.rightStick);
     if (const json* c = child(j, "l2")) triggerFromJson(*c, p.l2);
     if (const json* c = child(j, "r2")) triggerFromJson(*c, p.r2);
-    if (const json* c = child(j, "buttons")) {
-        for (const auto& [key, value] : c->items()) {
-            const auto src = buttonFromId(key);
-            if (!src || !isRemapSource(*src) || !value.is_string()) continue;
-            const auto target = buttonFromId(value.get<std::string>());
-            p.buttons[static_cast<size_t>(index(*src))] = (target && isRemapTarget(*target)) ? target : std::nullopt;
-        }
+    if (const json* c = child(j, "buttons")) bindingMapFromJson(*c, p.buttons);
+    if (auto it = j.find("shift_button"); it != j.end()) {
+        p.shiftButton = it->is_string() ? buttonFromId(it->get<std::string>()) : std::nullopt;
     }
+    if (const json* c = child(j, "shift_buttons")) bindingMapFromJson(*c, p.shiftButtons);
+    readEnum(j, "touchpad_zones", p.touchpadZones);
+    readEnum(j, "zone_trigger", p.zoneTrigger);
+    if (const json* c = child(j, "gyro")) gyroFromJson(*c, p.gyro);
     return p;
 }
 
@@ -193,6 +320,9 @@ std::string configToJson(const Config& cfg) {
              {"auto_update", cfg.settings.autoUpdate},
              {"enabled", cfg.settings.enabled},
              {"active_profile", cfg.settings.activeProfile},
+             {"left_stick_center", floats(cfg.settings.leftStickCenter)},
+             {"right_stick_center", floats(cfg.settings.rightStickCenter)},
+             {"gyro_bias", floats(cfg.settings.gyroBias)},
          }},
         {"profiles", profiles},
     };
@@ -215,6 +345,9 @@ Config configFromJson(const std::string& text, std::string* warning) {
         readBool(*s, "auto_update", cfg.settings.autoUpdate);
         readBool(*s, "enabled", cfg.settings.enabled);
         readInt(*s, "active_profile", cfg.settings.activeProfile);
+        readFloats(*s, "left_stick_center", cfg.settings.leftStickCenter);
+        readFloats(*s, "right_stick_center", cfg.settings.rightStickCenter);
+        readFloats(*s, "gyro_bias", cfg.settings.gyroBias);
     }
     if (auto it = root.find("profiles"); it != root.end() && it->is_array() && !it->empty()) {
         cfg.profiles.clear();

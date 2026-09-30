@@ -118,11 +118,52 @@ float processTrigger(float value, const TriggerSettings& s) {
     return ad + (1.0f - ad) * t;
 }
 
-float TriggerProcessor::apply(float value, const TriggerSettings& s) {
-    if (s.mode != TriggerMode::HairTrigger) {
-        reset();
-        return processTrigger(value, s);
+bool Turbo::update(bool active, int intervalMs, float dtSeconds) {
+    if (!active) {
+        running_ = false;
+        on_ = false;
+        timer_ = 0.0f;
+        return false;
     }
+    if (!running_) {  // first press goes out immediately
+        running_ = true;
+        on_ = true;
+        timer_ = 0.0f;
+        return true;
+    }
+    const float half = static_cast<float>(std::clamp(intervalMs, 1, 1000)) / 2000.0f;
+    timer_ += std::clamp(dtSeconds, 0.0f, 0.1f);
+    if (timer_ >= half) {
+        on_ = !on_;
+        timer_ -= half;
+        if (timer_ >= half) timer_ = 0.0f;  // never flip twice in one report
+    }
+    return on_;
+}
+
+void Turbo::reset() {
+    running_ = false;
+    on_ = false;
+    timer_ = 0.0f;
+}
+
+float TriggerProcessor::apply(float value, const TriggerSettings& s, float dtSeconds) {
+    float out = 0.0f;
+    if (s.mode == TriggerMode::HairTrigger) {
+        out = hair(value, s);
+    } else {
+        pressed_ = false;
+        extreme_ = 0.0f;
+        out = processTrigger(value, s);
+    }
+    if (!s.turbo) {
+        turbo_.reset();
+        return out;
+    }
+    return turbo_.update(out > 0.0f, s.turboIntervalMs, dtSeconds) ? 1.0f : 0.0f;
+}
+
+float TriggerProcessor::hair(float value, const TriggerSettings& s) {
     const float v = clamp01(value);
     const float activation = std::max(std::min(clamp01(s.deadzone), 0.9f), kHairMinActivation);
     const float resetDistance = std::clamp(s.hairResetDistance, 0.01f, 0.5f);
@@ -151,6 +192,67 @@ float TriggerProcessor::apply(float value, const TriggerSettings& s) {
 void TriggerProcessor::reset() {
     pressed_ = false;
     extreme_ = 0.0f;
+    turbo_.reset();
+}
+
+Vec2 recenterStick(Vec2 raw, const std::array<float, 2>& center) {
+    auto axis = [](float v, float c) {
+        c = std::clamp(c, -0.5f, 0.5f);
+        const float span = v >= c ? 1.0f - c : 1.0f + c;
+        return clamp11((v - c) / span);
+    };
+    return {axis(raw.x, center[0]), axis(raw.y, center[1])};
+}
+
+Vec2 GyroAim::update(const MotionState& motion, const GyroSettings& s, const std::array<float, 3>& bias, bool held,
+                     bool pressedNow, float dtSeconds) {
+    switch (s.activation) {
+        case GyroActivation::Always: active_ = true; break;
+        case GyroActivation::WhileHeld: active_ = held; break;
+        case GyroActivation::Toggle:
+            if (pressedNow) toggled_ = !toggled_;
+            active_ = toggled_;
+            break;
+        case GyroActivation::Off:
+        case GyroActivation::Count: active_ = false; break;
+    }
+    if (!active_) {
+        smoothed_ = {};
+        return {};
+    }
+
+    // Angular velocity in degrees per second. [0] pitch, [1] yaw, [2] roll.
+    auto rate = [&](size_t i) { return (static_cast<float>(motion.gyro[i]) - bias[i]) / kGyroCountsPerDegPerSec; };
+    const float turn = s.horizontalAxis == GyroAxis::Roll ? rate(2) : rate(1);
+    Vec2 v{-turn, rate(0) * s.verticalRatio};  // turning the pad left aims left, tilting it up aims up
+    if (s.invertX) v.x = -v.x;
+    if (s.invertY) v.y = -v.y;
+
+    // Soft tiered smoothing: slow (tremor sized) movements are averaged, fast ones pass straight through.
+    const float dt = std::clamp(dtSeconds, 0.0005f, 0.1f);
+    const float alpha = dt / (0.040f + dt);
+    smoothed_.x += alpha * (v.x - smoothed_.x);
+    smoothed_.y += alpha * (v.y - smoothed_.y);
+    const float speed = std::hypot(v.x, v.y);
+    const float threshold = std::clamp(s.smoothing, 0.0f, 1.0f) * 20.0f;
+    const float direct = threshold <= 0.0f ? 1.0f : clamp01((speed - threshold * 0.5f) / (threshold * 0.5f));
+    v.x = direct * v.x + (1.0f - direct) * smoothed_.x;
+    v.y = direct * v.y + (1.0f - direct) * smoothed_.y;
+
+    const float magnitude = std::hypot(v.x, v.y);
+    const float deadzone = std::max(0.0f, s.deadzone);
+    if (magnitude <= deadzone) return {};
+    // Stick deflection grows with rotation speed; full deflection at 360 / sensitivity deg/s.
+    const float deflection = clamp01((magnitude - deadzone) * std::max(0.01f, s.sensitivity) / 360.0f);
+    const float ad = clamp01(s.antiDeadzone);
+    const float out = ad + (1.0f - ad) * deflection;
+    return {v.x / magnitude * out, v.y / magnitude * out};
+}
+
+void GyroAim::reset() {
+    smoothed_ = {};
+    toggled_ = false;
+    active_ = false;
 }
 
 bool stickActive(float x, float y, const StickSettings& s) {

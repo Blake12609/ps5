@@ -13,8 +13,8 @@ TEST_CASE("config survives a JSON round trip") {
     cfg.profiles[1].rightStick.rcFilter = -0.4f;
     cfg.profiles[1].rightStick.curve = Curve::Custom;
     cfg.profiles[1].rightStick.customCurve = {{0.2f, 0.3f}, {0.6f, 0.5f}};
-    cfg.profiles[0].buttons[static_cast<size_t>(index(Button::PaddleLeft))] = Button::R2;
-    cfg.profiles[0].buttons[static_cast<size_t>(index(Button::Create))].reset();
+    cfg.profiles[0].buttons[static_cast<size_t>(index(Button::PaddleLeft))] = Binding::toButton(Button::R2);
+    cfg.profiles[0].buttons[static_cast<size_t>(index(Button::Create))] = Binding::disabled();
     cfg.profiles[1].r2.hairResetDistance = 0.08f;
     cfg.profiles[2].hotkey.reset();
     cfg.normalize();
@@ -62,11 +62,11 @@ TEST_CASE("out of range and unknown values are repaired") {
     CHECK(p.l2.mode == TriggerMode::HairTrigger);
     CHECK(p.l2.resistanceStrength == 8);
     CHECK(p.l2.maxRange >= p.l2.deadzone + 0.02f);
-    CHECK(p.buttons[static_cast<size_t>(index(Button::PaddleLeft))] == Button::R2);
-    CHECK_FALSE(p.buttons[static_cast<size_t>(index(Button::Cross))]);
-    CHECK_FALSE(p.buttons[static_cast<size_t>(index(Button::FnLeft))]);
+    CHECK(p.buttons[static_cast<size_t>(index(Button::PaddleLeft))] == Binding::toButton(Button::R2));
+    CHECK(p.buttons[static_cast<size_t>(index(Button::Cross))].kind == Binding::Kind::Disabled);
+    CHECK(p.buttons[static_cast<size_t>(index(Button::FnLeft))].kind == Binding::Kind::Disabled);
     // Buttons that were not mentioned keep their defaults.
-    CHECK(p.buttons[static_cast<size_t>(index(Button::Triangle))] == Button::Triangle);
+    CHECK(p.buttons[static_cast<size_t>(index(Button::Triangle))] == Binding::toButton(Button::Triangle));
 }
 
 TEST_CASE("an empty profile list gets the built-in profiles") {

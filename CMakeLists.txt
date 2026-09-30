@@ -45,6 +45,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(edgepad_core STATIC
   src/core/types.cpp
+  src/core/keys.cpp
   src/core/processing.cpp
   src/core/settings.cpp
   src/core/config_json.cpp
@@ -69,10 +70,12 @@ set(EDGEPAD_PLATFORM_SOURCES
 if(WIN32)
   list(APPEND EDGEPAD_PLATFORM_SOURCES
     src/platform/virtual_pad_vigem.cpp
+    src/platform/keyboard_win.cpp
     src/platform/http_winhttp.cpp)
 else()
   list(APPEND EDGEPAD_PLATFORM_SOURCES
     src/platform/virtual_pad_uinput.cpp
+    src/platform/keyboard_uinput.cpp
     src/platform/http_curl.cpp)
 endif()
 
@@ -85,7 +88,7 @@ if(WIN32)
     set_source_files_properties(src/platform/virtual_pad_vigem.cpp PROPERTIES COMPILE_OPTIONS /wd4828)
   endif()
   target_compile_definitions(edgepad_platform PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-  target_link_libraries(edgepad_platform PUBLIC ViGEmClient setupapi winhttp shell32 ole32)
+  target_link_libraries(edgepad_platform PUBLIC ViGEmClient setupapi winhttp shell32 ole32 user32)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -136,6 +139,7 @@ if(EDGEPAD_BUILD_TESTS)
     tests/test_pipeline.cpp
     tests/test_config.cpp
     tests/test_update.cpp
+    tests/test_features.cpp
   )
   target_link_libraries(edgepad_tests PRIVATE edgepad_core doctest::doctest)
   # Include real std headers instead of doctest's forward declarations (newer MSVC rejects them).

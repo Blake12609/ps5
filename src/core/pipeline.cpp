@@ -1,5 +1,6 @@
 #include "core/pipeline.hpp"
 
+#include <cmath>
 #include <utility>
 
 namespace edgepad {
@@ -17,18 +18,48 @@ ButtonMask passthroughMask() {
     return mask;
 }
 
+void emit(const Binding& b, OutputState& out) {
+    switch (b.kind) {
+        case Binding::Kind::Button:
+            if (b.button == Button::L2) {
+                out.l2 = 1.0f;
+            } else if (b.button == Button::R2) {
+                out.r2 = 1.0f;
+            } else {
+                out.buttons |= bit(b.button);
+            }
+            break;
+        case Binding::Kind::Key:
+            out.keys.set(b.key);
+            break;
+        case Binding::Kind::Inherit:
+        case Binding::Kind::Disabled:
+            break;
+    }
+}
+
 }  // namespace
 
 ButtonMask fnSourceMask(FnMode mode) {
     switch (mode) {
         case FnMode::Auto: return bit(Button::FnLeft) | bit(Button::FnRight) | bit(Button::Mute);
         case FnMode::Edge: return bit(Button::FnLeft) | bit(Button::FnRight);
+        case FnMode::LeftFn: return bit(Button::FnLeft);
+        case FnMode::RightFn: return bit(Button::FnRight);
         case FnMode::Mute: return bit(Button::Mute);
         case FnMode::Touchpad: return bit(Button::Touchpad);
         case FnMode::Disabled:
         case FnMode::Count: break;
     }
     return 0;
+}
+
+Button touchpadZoneAt(const TouchPoint& touch, TouchpadZones zones) {
+    const bool left = touch.x < 960;
+    const bool top = touch.y < 540;
+    if (zones == TouchpadZones::Two) return left ? Button::TouchLeft : Button::TouchRight;
+    if (top) return left ? Button::TouchTopLeft : Button::TouchTopRight;
+    return left ? Button::TouchBottomLeft : Button::TouchBottomRight;
 }
 
 dualsense::Effects effectsForConfig(const Config& cfg, uint8_t rumbleLarge, uint8_t rumbleSmall,
@@ -85,6 +116,8 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
         rightFilter_.reset();
         l2_.reset();
         r2_.reset();
+        gyro_.reset();
+        resetLayers();
         out.lx = in.lx;
         out.ly = in.ly;
         out.rx = in.rx;
@@ -96,46 +129,108 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     }
 
     const Profile& p = cfg.active();
-    // RC filter (stabilizer before, jitter after the stick processing), only while the stick moves.
-    const bool leftActive = stickActive(in.lx, in.ly, p.leftStick);
-    const bool rightActive = stickActive(in.rx, in.ry, p.rightStick);
-    const Vec2 left = leftFilter_.smooth({in.lx, in.ly}, p.leftStick.rcFilter, dtSeconds, leftActive);
-    const Vec2 right = rightFilter_.smooth({in.rx, in.ry}, p.rightStick.rcFilter, dtSeconds, rightActive);
+    if (cfg.settings.activeProfile != lastProfile_) {  // new profile: start with a clean slate
+        lastProfile_ = cfg.settings.activeProfile;
+        resetLayers();
+        gyro_.reset();
+    }
+
+    // Sticks: drift correction, RC filter (stabilizer before, jitter after the stick processing).
+    const Vec2 leftRaw = recenterStick({in.lx, in.ly}, cfg.settings.leftStickCenter);
+    const Vec2 rightRaw = recenterStick({in.rx, in.ry}, cfg.settings.rightStickCenter);
+    const bool leftActive = stickActive(leftRaw.x, leftRaw.y, p.leftStick);
+    const bool rightActive = stickActive(rightRaw.x, rightRaw.y, p.rightStick);
+    const Vec2 left = leftFilter_.smooth(leftRaw, p.leftStick.rcFilter, dtSeconds, leftActive);
+    const Vec2 right = rightFilter_.smooth(rightRaw, p.rightStick.rcFilter, dtSeconds, rightActive);
     Vec2 leftOut = processStick(left.x, left.y, p.leftStick);
     Vec2 rightOut = processStick(right.x, right.y, p.rightStick);
     leftOut = leftFilter_.jitter(leftOut, p.leftStick.rcFilter, dtSeconds, leftActive);
     rightOut = rightFilter_.jitter(rightOut, p.rightStick.rcFilter, dtSeconds, rightActive);
     if (p.swapSticks) std::swap(leftOut, rightOut);
+
+    // Gyro aiming adds to the right stick.
+    const Vec2 gyro = gyro_.update(in.motion, p.gyro, cfg.settings.gyroBias, has(pressed, p.gyro.button),
+                                   has(newlyPressed, p.gyro.button), dtSeconds);
+    rightOut.x += gyro.x;
+    rightOut.y += gyro.y;
+    if (const float length = std::hypot(rightOut.x, rightOut.y); length > 1.0f) {
+        rightOut.x /= length;
+        rightOut.y /= length;
+    }
     out.lx = leftOut.x;
     out.ly = leftOut.y;
     out.rx = rightOut.x;
     out.ry = rightOut.y;
-    out.l2 = l2_.apply(in.l2, p.l2);
-    out.r2 = r2_.apply(in.r2, p.r2);
+    out.l2 = l2_.apply(in.l2, p.l2, dtSeconds);
+    out.r2 = r2_.apply(in.r2, p.r2, dtSeconds);
+
+    // Touchpad zones: where the pad is clicked (or touched) becomes its own button.
+    ButtonMask sources = usable;
+    if (p.touchpadZones != TouchpadZones::Off) {
+        const bool clickMode = p.zoneTrigger == ZoneTrigger::Click;
+        const bool pressedZone = clickMode ? has(usable, Button::Touchpad) : in.motion.touch[0].active;
+        if (pressedZone) {
+            if (!zoneLatched_) zoneLatched_ = touchpadZoneAt(in.motion.touch[0], p.touchpadZones);
+            sources |= bit(*zoneLatched_);
+        } else {
+            zoneLatched_.reset();
+        }
+        if (clickMode) sources &= ~bit(Button::Touchpad);
+    } else {
+        zoneLatched_.reset();
+    }
+
+    // Shift layer: a button uses the layer that was active when it went down, until released.
+    const bool shiftHeld = p.shiftButton && has(sources, *p.shiftButton);
+    if (p.shiftButton) sources &= ~bit(*p.shiftButton);
+    const ButtonMask newSources = sources & ~prevSources_;
+    shiftLatched_ = (shiftLatched_ & sources) | (shiftHeld ? newSources : 0);
+    prevSources_ = sources;
 
     for (int i = 0; i < kButtonCount; ++i) {
         const Button src = buttonAt(i);
-        if (!has(usable, src) || !isRemapSource(src)) continue;
-        const auto& target = p.buttons[static_cast<size_t>(i)];
-        if (!target) continue;
-        if (*target == Button::L2) {
-            out.l2 = 1.0f;
-        } else if (*target == Button::R2) {
-            out.r2 = 1.0f;
+        if (!isRemapSource(src)) continue;
+        const size_t k = static_cast<size_t>(i);
+        const bool held = has(sources, src);
+        const Binding& shifted = p.shiftButtons[k];
+        const Binding& b =
+            (has(shiftLatched_, src) && shifted.kind != Binding::Kind::Inherit) ? shifted : p.buttons[k];
+
+        bool active = held;
+        if (b.toggle) {
+            if (has(newSources, src)) toggled_[k] = !toggled_[k];
+            active = toggled_[k];
         } else {
-            out.buttons |= bit(*target);
+            toggled_[k] = false;
         }
+        if (b.turbo) {
+            active = turbo_[k].update(active, b.turboIntervalMs, dtSeconds);
+        } else {
+            turbo_[k].reset();
+        }
+        if (active) emit(b, out);
     }
     return out;
+}
+
+void Pipeline::resetLayers() {
+    prevSources_ = 0;
+    shiftLatched_ = 0;
+    zoneLatched_.reset();
+    toggled_.fill(false);
+    for (auto& t : turbo_) t.reset();
 }
 
 void Pipeline::reset() {
     previous_ = 0;
     suppressed_ = 0;
+    lastProfile_ = -1;
+    resetLayers();
     leftFilter_.reset();
     rightFilter_.reset();
     l2_.reset();
     r2_.reset();
+    gyro_.reset();
 }
 
 }  // namespace edgepad

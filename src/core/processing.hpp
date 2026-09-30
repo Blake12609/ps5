@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "core/types.hpp"
+
 namespace edgepad {
 
 // Response curves modelled after the DualSense Edge stick presets.
@@ -46,13 +48,55 @@ struct TriggerSettings {
     // Hair trigger: how far the trigger has to come back up to release, and go down again to
     // fire, anywhere in its travel (rapid trigger). Smaller = faster follow-up shots.
     float hairResetDistance = 0.04f;
+    bool turbo = false;        // rapid fire: pulse full presses while the trigger is pressed
+    int turboIntervalMs = 50;  // time between turbo presses, 1..100 ms
 
     bool operator==(const TriggerSettings&) const = default;
+};
+
+// Gyro aiming: turning / tilting the controller moves the right stick.
+enum class GyroActivation : uint8_t { Off, Always, WhileHeld, Toggle, Count };
+enum class GyroAxis : uint8_t { Yaw, Roll, Count };  // what turns the aim left / right
+
+struct GyroSettings {
+    GyroActivation activation = GyroActivation::Off;
+    Button button = Button::L2;       // hold / toggle button (e.g. aim down sights)
+    float sensitivity = 3.0f;         // full stick deflection at 360/sensitivity degrees per second
+    float verticalRatio = 1.0f;       // vertical speed relative to horizontal
+    GyroAxis horizontalAxis = GyroAxis::Yaw;
+    float deadzone = 1.5f;            // degrees per second ignored (hand tremor, sensor noise)
+    float smoothing = 0.25f;          // 0..1, smooths slow movements only, fast ones stay instant
+    float antiDeadzone = 0.15f;       // minimum stick output while the gyro moves (beats game dead zones)
+    bool invertX = false;
+    bool invertY = false;
+
+    bool operator==(const GyroSettings&) const = default;
 };
 
 struct Vec2 {
     float x = 0.0f;
     float y = 0.0f;
+};
+
+// DualSense gyro: raw counts per degree per second.
+inline constexpr float kGyroCountsPerDegPerSec = 16.0f;
+
+// Removes a stick's resting offset (drift) while keeping full deflection reachable.
+Vec2 recenterStick(Vec2 raw, const std::array<float, 2>& center);
+
+// Gyro -> right stick. Stateful for smoothing and toggle activation.
+class GyroAim {
+public:
+    // `held`: the activation button is down; `pressedNow`: it went down this report.
+    Vec2 update(const MotionState& motion, const GyroSettings& s, const std::array<float, 3>& bias, bool held,
+                bool pressedNow, float dtSeconds);
+    bool active() const { return active_; }
+    void reset();
+
+private:
+    Vec2 smoothed_{};
+    bool toggled_ = false;
+    bool active_ = false;
 };
 
 // Maximum time constant of the RC low-pass at rcFilter = 1.0 (seconds).
@@ -74,6 +118,19 @@ float applyCurve(float t, Curve curve, float intensity, const std::vector<CurveP
 // Full stick chain: invert -> dead zone -> curve -> anti-dead zone -> outer dead zone.
 Vec2 processStick(float x, float y, const StickSettings& s);
 
+// Turbo / rapid fire timing: while active, alternates on and off so that a new press starts
+// every `intervalMs`. Changes at most once per controller report.
+class Turbo {
+public:
+    bool update(bool active, int intervalMs, float dtSeconds);
+    void reset();
+
+private:
+    bool running_ = false;
+    bool on_ = false;
+    float timer_ = 0.0f;
+};
+
 // Hair trigger never fires closer to the top than this, so resting noise cannot fire it.
 inline constexpr float kHairMinActivation = 0.02f;
 
@@ -86,12 +143,15 @@ float processTrigger(float value, const TriggerSettings& s);
 // distance - without having to let the trigger go all the way back up.
 class TriggerProcessor {
 public:
-    float apply(float value, const TriggerSettings& s);
+    float apply(float value, const TriggerSettings& s, float dtSeconds = 0.0f);
     void reset();
 
 private:
+    float hair(float value, const TriggerSettings& s);
+
     bool pressed_ = false;
     float extreme_ = 0.0f;  // deepest point while pressed, shallowest point while released
+    Turbo turbo_;
 };
 
 // True while the stick is being moved, i.e. pushed past its dead zone.

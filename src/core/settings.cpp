@@ -36,23 +36,85 @@ void normalizeTrigger(TriggerSettings& t) {
     t.resistancePosition = clampRange(t.resistancePosition, 0.0f, 0.9f);
     t.resistanceStrength = std::clamp(t.resistanceStrength, 1, 8);
     t.hairResetDistance = clampRange(t.hairResetDistance, 0.01f, 0.5f);
+    t.turboIntervalMs = std::clamp(t.turboIntervalMs, kTurboMinMs, kTurboMaxMs);
     if (t.mode >= TriggerMode::Count) t.mode = TriggerMode::Analog;
     if (t.resistance >= TriggerResistance::Count) t.resistance = TriggerResistance::Off;
 }
 
 }  // namespace
 
-ButtonMap defaultButtonMap() {
-    ButtonMap map{};
+Binding Binding::toButton(edgepad::Button b) {
+    Binding x;
+    x.kind = Kind::Button;
+    x.button = b;
+    return x;
+}
+
+Binding Binding::toKey(edgepad::Key k) {
+    Binding x;
+    x.kind = Kind::Key;
+    x.key = k;
+    return x;
+}
+
+Binding Binding::disabled() { return Binding{}; }
+
+Binding Binding::inherit() {
+    Binding x;
+    x.kind = Kind::Inherit;
+    return x;
+}
+
+BindingMap defaultButtonMap() {
+    BindingMap map{};
     for (int i = 0; i < kButtonCount; ++i) {
         const Button b = buttonAt(i);
-        if (isRemapTarget(b)) map[static_cast<size_t>(i)] = b;
+        if (isRemapTarget(b)) map[static_cast<size_t>(i)] = Binding::toButton(b);
     }
     // Popular shooter layout for the back buttons: jump and crouch without leaving the right stick.
-    map[static_cast<size_t>(index(Button::PaddleLeft))] = Button::Circle;
-    map[static_cast<size_t>(index(Button::PaddleRight))] = Button::Cross;
+    map[static_cast<size_t>(index(Button::PaddleLeft))] = Binding::toButton(Button::Circle);
+    map[static_cast<size_t>(index(Button::PaddleRight))] = Binding::toButton(Button::Cross);
+    // Touchpad zones act like the touchpad click until they are bound to something else.
+    for (Button zone : {Button::TouchLeft, Button::TouchRight, Button::TouchTopLeft, Button::TouchTopRight,
+                        Button::TouchBottomLeft, Button::TouchBottomRight}) {
+        map[static_cast<size_t>(index(zone))] = Binding::toButton(Button::Touchpad);
+    }
     return map;
 }
+
+BindingMap defaultShiftMap() {
+    BindingMap map{};
+    map.fill(Binding::inherit());
+    return map;
+}
+
+namespace {
+
+void normalizeBinding(Binding& b, bool allowInherit) {
+    if (b.kind == Binding::Kind::Inherit && !allowInherit) b.kind = Binding::Kind::Disabled;
+    if (b.kind == Binding::Kind::Button && !isRemapTarget(b.button)) b.kind = Binding::Kind::Disabled;
+    if (b.kind == Binding::Kind::Key && (b.key == Key::None || b.key >= Key::Count)) b.kind = Binding::Kind::Disabled;
+    if (b.kind != Binding::Kind::Button) b.button = Button::Cross;
+    if (b.kind != Binding::Kind::Key) b.key = Key::None;
+    if (b.kind == Binding::Kind::Inherit || b.kind == Binding::Kind::Disabled) {
+        b.toggle = false;
+        b.turbo = false;
+    }
+    b.turboIntervalMs = std::clamp(b.turboIntervalMs, kTurboMinMs, kTurboMaxMs);
+}
+
+void normalizeGyro(GyroSettings& g) {
+    if (g.activation >= GyroActivation::Count) g.activation = GyroActivation::Off;
+    if (g.horizontalAxis >= GyroAxis::Count) g.horizontalAxis = GyroAxis::Yaw;
+    if (!isPhysicalButton(g.button)) g.button = Button::L2;
+    g.sensitivity = clampRange(g.sensitivity, 0.25f, 10.0f);
+    g.verticalRatio = clampRange(g.verticalRatio, 0.0f, 2.0f);
+    g.deadzone = clampRange(g.deadzone, 0.0f, 20.0f);
+    g.smoothing = clampRange(g.smoothing, 0.0f, 1.0f);
+    g.antiDeadzone = clampRange(g.antiDeadzone, 0.0f, 0.6f);
+}
+
+}  // namespace
 
 Config Config::defaults() {
     Config cfg;
@@ -101,10 +163,12 @@ void Config::normalize() {
         normalizeStick(p.rightStick);
         normalizeTrigger(p.l2);
         normalizeTrigger(p.r2);
-        for (int i = 0; i < kButtonCount; ++i) {
-            auto& target = p.buttons[static_cast<size_t>(i)];
-            if (target && !isRemapTarget(*target)) target.reset();
-        }
+        for (auto& b : p.buttons) normalizeBinding(b, false);
+        for (auto& b : p.shiftButtons) normalizeBinding(b, true);
+        if (p.shiftButton && (!isRemapSource(*p.shiftButton) || *p.shiftButton >= Button::Count)) p.shiftButton.reset();
+        if (p.touchpadZones >= TouchpadZones::Count) p.touchpadZones = TouchpadZones::Off;
+        if (p.zoneTrigger >= ZoneTrigger::Count) p.zoneTrigger = ZoneTrigger::Click;
+        normalizeGyro(p.gyro);
         if (p.hotkey && std::find(kProfileHotkeys.begin(), kProfileHotkeys.end(), *p.hotkey) == kProfileHotkeys.end()) {
             p.hotkey.reset();
         }
@@ -112,6 +176,9 @@ void Config::normalize() {
     if (settings.output >= OutputKind::Count) settings.output = OutputKind::Xbox360;
     if (settings.fnMode >= FnMode::Count) settings.fnMode = FnMode::Auto;
     settings.activeProfile = std::clamp(settings.activeProfile, 0, static_cast<int>(profiles.size()) - 1);
+    for (float& c : settings.leftStickCenter) c = clampRange(c, -0.5f, 0.5f);
+    for (float& c : settings.rightStickCenter) c = clampRange(c, -0.5f, 0.5f);
+    for (float& b : settings.gyroBias) b = clampRange(b, -2000.0f, 2000.0f);
 }
 
 const Profile& Config::active() const {
@@ -176,6 +243,8 @@ std::string_view fnModeId(FnMode m) {
     switch (m) {
         case FnMode::Auto: return "auto";
         case FnMode::Edge: return "edge";
+        case FnMode::LeftFn: return "left_fn";
+        case FnMode::RightFn: return "right_fn";
         case FnMode::Mute: return "mute";
         case FnMode::Touchpad: return "touchpad";
         case FnMode::Disabled: return "disabled";
@@ -187,13 +256,67 @@ std::string_view fnModeId(FnMode m) {
 std::string_view fnModeLabel(FnMode m) {
     switch (m) {
         case FnMode::Auto: return "Auto (Edge Fn buttons + Mute)";
-        case FnMode::Edge: return "Edge Fn buttons only";
-        case FnMode::Mute: return "Mute button";
+        case FnMode::Edge: return "Both Edge Fn buttons";
+        case FnMode::LeftFn: return "Left Edge Fn (right one is free to bind)";
+        case FnMode::RightFn: return "Right Edge Fn (left one is free to bind)";
+        case FnMode::Mute: return "Mute button (both Edge Fn free to bind)";
         case FnMode::Touchpad: return "Touchpad click";
         case FnMode::Disabled: return "Disabled";
         case FnMode::Count: break;
     }
     return "Auto (Edge Fn buttons + Mute)";
+}
+
+std::string_view touchpadZonesId(TouchpadZones z) {
+    switch (z) {
+        case TouchpadZones::Two: return "two";
+        case TouchpadZones::Four: return "four";
+        default: return "off";
+    }
+}
+
+std::string_view touchpadZonesLabel(TouchpadZones z) {
+    switch (z) {
+        case TouchpadZones::Two: return "2 zones (left / right)";
+        case TouchpadZones::Four: return "4 zones (quarters)";
+        default: return "Off (one touchpad button)";
+    }
+}
+
+std::string_view zoneTriggerId(ZoneTrigger t) { return t == ZoneTrigger::Touch ? "touch" : "click"; }
+std::string_view zoneTriggerLabel(ZoneTrigger t) { return t == ZoneTrigger::Touch ? "Touch the zone" : "Click the zone"; }
+
+std::string_view gyroActivationId(GyroActivation a) {
+    switch (a) {
+        case GyroActivation::Always: return "always";
+        case GyroActivation::WhileHeld: return "while_held";
+        case GyroActivation::Toggle: return "toggle";
+        default: return "off";
+    }
+}
+
+std::string_view gyroActivationLabel(GyroActivation a) {
+    switch (a) {
+        case GyroActivation::Always: return "Always on";
+        case GyroActivation::WhileHeld: return "While a button is held";
+        case GyroActivation::Toggle: return "Toggle with a button";
+        default: return "Off";
+    }
+}
+
+std::string_view gyroAxisId(GyroAxis a) { return a == GyroAxis::Roll ? "roll" : "yaw"; }
+std::string_view gyroAxisLabel(GyroAxis a) {
+    return a == GyroAxis::Roll ? "Roll (tilt the pad left / right)" : "Yaw (turn the pad left / right)";
+}
+
+std::string bindingLabel(const Binding& b) {
+    switch (b.kind) {
+        case Binding::Kind::Inherit: return "Same as normal";
+        case Binding::Kind::Disabled: return "Disabled";
+        case Binding::Kind::Button: return std::string(buttonLabel(b.button));
+        case Binding::Kind::Key: return (isMouseButton(b.key) ? "" : "Key: ") + std::string(keyLabel(b.key));
+    }
+    return "Disabled";
 }
 
 uint8_t playerLedsForProfile(int index) {

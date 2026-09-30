@@ -18,26 +18,41 @@ struct PipelineEvents {
 // Buttons that act as "Fn" for the given mode.
 ButtonMask fnSourceMask(FnMode mode);
 
+// Touchpad zone button for a finger position.
+Button touchpadZoneAt(const TouchPoint& touch, TouchpadZones zones);
+
 // Lightbar colour, player LEDs (profile slot), adaptive trigger walls and forwarded rumble.
 // `gameLightbar` is the colour a game set on the virtual DualShock 4, if any.
 dualsense::Effects effectsForConfig(const Config& cfg, uint8_t rumbleLarge, uint8_t rumbleSmall,
                                     const std::optional<std::array<uint8_t, 3>>& gameLightbar = std::nullopt);
 
-// Turns raw controller input into the virtual controller state for the active profile.
-// Handles Fn combos (Fn + face button = switch profile, Fn + Options = toggle remapping),
-// RC filters, stick/trigger processing and button remapping.
+// Turns raw controller input into the virtual controller state for the active profile:
+// Fn combos (profile switching, remapping toggle), stick drift correction, RC filters,
+// stick/trigger processing, gyro aiming, touchpad zones, shift layer, toggle / turbo and
+// button remapping to controller buttons or keyboard keys / mouse buttons.
 class Pipeline {
 public:
     OutputState process(const InputState& in, Config& cfg, float dtSeconds, PipelineEvents* events = nullptr);
     void reset();
+    bool gyroActive() const { return gyro_.active(); }
 
 private:
-    ButtonMask previous_ = 0;
-    ButtonMask suppressed_ = 0;
+    void resetLayers();
+
+    ButtonMask previous_ = 0;      // raw buttons of the previous report
+    ButtonMask suppressed_ = 0;    // swallowed by an Fn combo until released
+    ButtonMask prevSources_ = 0;   // remappable sources (incl. touchpad zones) of the previous report
+    ButtonMask shiftLatched_ = 0;  // sources pressed while the shift button was held
+    std::optional<Button> zoneLatched_;
+    std::array<bool, kButtonCount> toggled_{};
+    std::array<Turbo, kButtonCount> turbo_{};
+    int lastProfile_ = -1;
+
     RcFilter leftFilter_;
     RcFilter rightFilter_;
     TriggerProcessor l2_;
     TriggerProcessor r2_;
+    GyroAim gyro_;
 };
 
 }  // namespace edgepad

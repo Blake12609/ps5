@@ -31,7 +31,7 @@ TEST_CASE("back buttons use the profile mapping") {
     Config cfg = testConfig();
     Pipeline p;
     CHECK(p.process(pressing(bit(Button::PaddleLeft)), cfg, 0.004f).buttons == bit(Button::Circle));
-    cfg.active().buttons[static_cast<size_t>(index(Button::PaddleRight))] = Button::R2;
+    cfg.active().buttons[static_cast<size_t>(index(Button::PaddleRight))] = Binding::toButton(Button::R2);
     const OutputState out = p.process(pressing(bit(Button::PaddleRight)), cfg, 0.004f);
     CHECK(out.buttons == 0);
     CHECK(out.r2 == 1.0f);
@@ -39,7 +39,7 @@ TEST_CASE("back buttons use the profile mapping") {
 
 TEST_CASE("a disabled button is not forwarded") {
     Config cfg = testConfig();
-    cfg.active().buttons[static_cast<size_t>(index(Button::Cross))].reset();
+    cfg.active().buttons[static_cast<size_t>(index(Button::Cross))] = Binding::disabled();
     Pipeline p;
     CHECK(p.process(pressing(bit(Button::Cross)), cfg, 0.004f).buttons == 0);
 }
@@ -102,7 +102,7 @@ TEST_CASE("Fn + Options toggles raw passthrough") {
 TEST_CASE("Fn buttons and paddles are never sent to the game as themselves") {
     Config cfg = testConfig();
     cfg.settings.fnMode = FnMode::Disabled;
-    cfg.active().buttons[static_cast<size_t>(index(Button::FnLeft))].reset();
+    cfg.active().buttons[static_cast<size_t>(index(Button::FnLeft))] = Binding::disabled();
     Pipeline p;
     CHECK(p.process(pressing(bit(Button::FnLeft)), cfg, 0.004f).buttons == 0);
 }

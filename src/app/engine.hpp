@@ -23,8 +23,10 @@ struct EngineStatus {
     std::string padName;     // active virtual controller, empty when none
     std::string padMessage;  // why there is no virtual controller
     PadError padError = PadError::None;
+    std::string keyboardMessage;  // why key bindings cannot be sent, empty when fine
 
     float reportRate = 0.0f;  // controller reports per second
+    bool gyroActive = false;  // gyro aiming is currently switched on
     InputState input;
     OutputState output;
 

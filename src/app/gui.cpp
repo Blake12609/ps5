@@ -343,6 +343,8 @@ void drawTriggerView(const char* id, const TriggerSettings& t, float raw, float 
 // Application UI
 // ---------------------------------------------------------------------------
 class App {
+    enum class Calibrating { None, Sticks, Gyro };
+
 public:
     App(Engine& engine, const ConfigStore& store, Updater& updater, GuiOptions options, Fonts fonts)
         : engine_(engine), store_(store), updater_(updater), cfg_(std::move(options.config)),
@@ -354,6 +356,7 @@ public:
     bool restartRequested() const { return restartRequested_; }
 
     void frame(double now) {
+        now_ = now;
         status_ = engine_.status();
         if (status_.revision != seenRevision_) {
             // The controller switched profile / toggled remapping with an Fn combo.
@@ -366,8 +369,10 @@ public:
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
         ImGui::SetNextWindowSize(vp->WorkSize);
+        // No title bar or resizing (the OS window does that), but keep the scrollbar for small screens.
         ImGui::Begin("EdgePad", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                          ImGuiWindowFlags_NoBringToFrontOnFocus);
 
         changed_ = false;
@@ -387,6 +392,10 @@ public:
                 drawButtonsTab();
                 ImGui::EndTabItem();
             }
+            if (ImGui::BeginTabItem("Gyro")) {
+                drawGyroTab();
+                ImGui::EndTabItem();
+            }
             if (ImGui::BeginTabItem("Settings")) {
                 drawSettingsTab();
                 ImGui::EndTabItem();
@@ -398,6 +407,7 @@ public:
             ImGui::EndTabBar();
         }
         ImGui::End();
+        updateCalibration(now);
 
         if (changed_) {
             cfg_.normalize();
@@ -726,6 +736,12 @@ private:
             ImGui::EndTable();
         }
         changed_ |= ImGui::Checkbox("Swap left and right sticks", &p.swapSticks);
+        ImGui::SameLine(0.0f, 32.0f);
+        drawCalibrationControls(Calibrating::Sticks, "Calibrate sticks (fix drift)", stickCalMessage_);
+        ImGui::SameLine();
+        helpMarker("Leave both sticks alone and click Calibrate: EdgePad measures where they rest and re-centres them, "
+                   "so a drifting stick is fixed without raising the dead zone. Calibration belongs to this "
+                   "controller and applies to every profile.");
     }
 
     // -- triggers -------------------------------------------------------------
@@ -755,6 +771,14 @@ private:
             changed_ |= sliderPercent("Anti-dead zone", &t.antiDeadzone, 0, 90,
                                       "Minimum output as soon as the trigger leaves its dead zone.");
         }
+        changed_ |= ImGui::Checkbox("Turbo (rapid fire)", &t.turbo);
+        helpMarker("While the trigger is pressed it fires full presses over and over.");
+        if (t.turbo) {
+            changed_ |= ImGui::SliderInt("Between presses", &t.turboIntervalMs, kTurboMinMs, kTurboMaxMs, "%d ms",
+                                         ImGuiSliderFlags_AlwaysClamp);
+            helpMarker("1-100 ms from one press to the next. The controller reports every ~4 ms and most games read "
+                       "input once per frame, so very short times are limited by those.");
+        }
         changed_ |= enumCombo("Adaptive resistance", t.resistance, resistanceLabel);
         if (t.resistance == TriggerResistance::Wall) {
             changed_ |= sliderPercent("Wall position", &t.resistancePosition, 0, 90,
@@ -780,69 +804,372 @@ private:
     }
 
     // -- buttons --------------------------------------------------------------
-    void drawButtonRow(Button source) {
+    // Everything a button can do: controller buttons, keyboard keys and mouse buttons.
+    bool bindingCombo(const char* id, Binding& b, bool allowInherit) {
+        bool changed = false;
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::BeginCombo(id, bindingLabel(b).c_str(), ImGuiComboFlags_HeightLarge)) {
+            auto option = [&](const std::string& label, const Binding& value) {
+                const bool selected = b.kind == value.kind && b.button == value.button && b.key == value.key;
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    Binding next = value;
+                    next.toggle = b.toggle;
+                    next.turbo = b.turbo;
+                    next.turboIntervalMs = b.turboIntervalMs;
+                    b = next;
+                    changed = true;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            };
+            if (allowInherit) option("Same as normal", Binding::inherit());
+            option("Disabled", Binding::disabled());
+            ImGui::SeparatorText("Controller");
+            for (int i = 0; i < kButtonCount; ++i) {
+                const Button t = buttonAt(i);
+                if (isRemapTarget(t)) option(std::string(buttonLabel(t)), Binding::toButton(t));
+            }
+            ImGui::SeparatorText("Keyboard");
+            for (int i = 1; i < kKeyCount; ++i) {
+                const Key k = static_cast<Key>(i);
+                if (!isMouseButton(k)) option("Key: " + std::string(keyLabel(k)), Binding::toKey(k));
+            }
+            ImGui::SeparatorText("Mouse");
+            for (int i = 1; i < kKeyCount; ++i) {
+                const Key k = static_cast<Key>(i);
+                if (isMouseButton(k)) option(std::string(keyLabel(k)), Binding::toKey(k));
+            }
+            ImGui::EndCombo();
+        }
+        return changed;
+    }
+
+    void drawButtonRow(Button source, ButtonMask live) {
         ImGui::PushID(static_cast<int>(source));
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::AlignTextToFramePadding();
-        statusDot(has(status_.input.buttons, source) ? kAccent : kGrid);
+        statusDot(has(live, source) ? kAccent : kGrid);
         ImGui::TextUnformatted(std::string(buttonLabel(source)).c_str());
         ImGui::TableNextColumn();
+        Profile& p = profile();
         if (fnSourceMask(cfg_.settings.fnMode) & bit(source)) {
             ImGui::AlignTextToFramePadding();
             ImGui::TextDisabled("Fn (profile switching)");
+            ImGui::SetItemTooltip("To bind this button, pick another Fn button in Settings "
+                                  "(for example only the left Fn, or Mute).");
+        } else if (p.shiftButton == source) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAccent), "Shift button");
         } else {
-            auto& target = profile().buttons[static_cast<size_t>(index(source))];
-            const std::string preview = target ? std::string(buttonLabel(*target)) : "Disabled";
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::BeginCombo("##target", preview.c_str())) {
-                if (ImGui::Selectable("Disabled", !target)) {
-                    target.reset();
+            BindingMap& map = editingShift_ ? p.shiftButtons : p.buttons;
+            Binding& b = map[static_cast<size_t>(index(source))];
+            changed_ |= bindingCombo("##target", b, editingShift_);
+            ImGui::TableNextColumn();
+            const bool canExtras = b.kind == Binding::Kind::Button || b.kind == Binding::Kind::Key;
+            ImGui::BeginDisabled(!canExtras);
+            changed_ |= ImGui::Checkbox("Toggle", &b.toggle);
+            ImGui::SetItemTooltip("Tap to switch on, tap again to switch off.");
+            ImGui::SameLine();
+            changed_ |= ImGui::Checkbox("Turbo", &b.turbo);
+            ImGui::SetItemTooltip("Repeats the press while the button is held (or toggled on).");
+            if (b.turbo) {
+                ImGui::SetNextItemWidth(-1.0f);
+                changed_ |= ImGui::SliderInt("##turbo_ms", &b.turboIntervalMs, kTurboMinMs, kTurboMaxMs,
+                                             "%d ms between presses", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Time between turbo presses (1-100 ms). The controller reports every ~4 ms and most games read "
+                    "input once per frame, so very short times are limited by those.");
+            }
+            ImGui::EndDisabled();
+        }
+        ImGui::PopID();
+    }
+
+    void drawButtonGroup(const char* title, std::initializer_list<Button> buttons, ButtonMask live) {
+        ImGui::SeparatorText(title);
+        if (ImGui::BeginTable(title, 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn("Sends", ImGuiTableColumnFlags_WidthStretch, 1.25f);
+            ImGui::TableSetupColumn("Extras", ImGuiTableColumnFlags_WidthStretch, 1.35f);
+            for (Button b : buttons) drawButtonRow(b, live);
+            ImGui::EndTable();
+        }
+    }
+
+    void drawButtonsTab() {
+        Profile& p = profile();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Editing");
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Normal layer", !editingShift_)) editingShift_ = false;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Shift layer", editingShift_)) editingShift_ = true;
+
+        ImGui::SameLine(0.0f, 28.0f);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Shift button");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 11.0f);
+        const std::string shiftPreview = p.shiftButton ? std::string(buttonLabel(*p.shiftButton)) : "None";
+        if (ImGui::BeginCombo("##shift", shiftPreview.c_str())) {
+            if (ImGui::Selectable("None", !p.shiftButton)) {
+                p.shiftButton.reset();
+                changed_ = true;
+            }
+            for (int i = 0; i < kButtonCount; ++i) {
+                const Button b = buttonAt(i);
+                if (!isRemapSource(b) || (fnSourceMask(cfg_.settings.fnMode) & bit(b))) continue;
+                if (ImGui::Selectable(std::string(buttonLabel(b)).c_str(), p.shiftButton == b)) {
+                    p.shiftButton = b;
                     changed_ = true;
                 }
+            }
+            ImGui::EndCombo();
+        }
+        helpMarker("Hold the shift button and every button uses its shift-layer binding instead (buttons left on "
+                   "\"Same as normal\" keep working as usual). A back button makes a great shift button. The shift "
+                   "button itself sends nothing.");
+
+        ImGui::SameLine(0.0f, 28.0f);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Touchpad");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);
+        changed_ |= enumCombo("##zones", p.touchpadZones, touchpadZonesLabel);
+        if (p.touchpadZones != TouchpadZones::Off) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8.5f);
+            changed_ |= enumCombo("##zoneTrigger", p.zoneTrigger, zoneTriggerLabel);
+        }
+        helpMarker("Split the touchpad into 2 or 4 buttons that can each be bound to anything - extra buttons for a "
+                   "regular DualSense. \"Click\" fires when you press the pad down in a zone, \"Touch\" as soon as "
+                   "your finger is on it.");
+
+        if (editingShift_ && !p.shiftButton) {
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kWarn),
+                               "Pick a shift button first - the shift layer is used while it is held.");
+        }
+
+        ButtonMask live = status_.input.buttons;
+        if (p.touchpadZones != TouchpadZones::Off) {
+            const TouchPoint& t = status_.input.motion.touch[0];
+            const bool on = p.zoneTrigger == ZoneTrigger::Click ? has(live, Button::Touchpad) : t.active;
+            if (on) live |= bit(touchpadZoneAt(t, p.touchpadZones));
+        }
+
+        if (ImGui::BeginTable("buttonColumns", 2, ImGuiTableFlags_SizingStretchSame)) {
+            ImGui::TableNextColumn();
+            drawButtonGroup("Back buttons", {Button::PaddleLeft, Button::PaddleRight}, live);
+            drawButtonGroup("Face buttons", {Button::Cross, Button::Circle, Button::Square, Button::Triangle}, live);
+            drawButtonGroup("Shoulders and sticks", {Button::L1, Button::R1, Button::L3, Button::R3}, live);
+            if (p.touchpadZones == TouchpadZones::Two) {
+                drawButtonGroup("Touchpad zones", {Button::TouchLeft, Button::TouchRight}, live);
+            } else if (p.touchpadZones == TouchpadZones::Four) {
+                drawButtonGroup("Touchpad zones", {Button::TouchTopLeft, Button::TouchTopRight, Button::TouchBottomLeft,
+                                                   Button::TouchBottomRight},
+                                live);
+            }
+            ImGui::TableNextColumn();
+            drawButtonGroup("Edge Fn buttons", {Button::FnLeft, Button::FnRight}, live);
+            drawButtonGroup("D-pad", {Button::DpadUp, Button::DpadDown, Button::DpadLeft, Button::DpadRight}, live);
+            drawButtonGroup("System", {Button::Create, Button::Options, Button::PS, Button::Touchpad, Button::Mute}, live);
+            ImGui::EndTable();
+        }
+        ImGui::Spacing();
+        if (ImGui::Button(editingShift_ ? "Reset shift layer" : "Reset buttons to default")) {
+            if (editingShift_) {
+                p.shiftButtons = defaultShiftMap();
+            } else {
+                p.buttons = defaultButtonMap();
+            }
+            changed_ = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("L2 / R2 targets press the trigger fully. Keyboard and mouse binds work in any game.");
+        if (!status_.keyboardMessage.empty()) {
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kWarn), "%s", status_.keyboardMessage.c_str());
+        }
+    }
+
+    // -- gyro -----------------------------------------------------------------
+    void drawRateBar(const char* label, float degPerSec) {
+        const float width = ImGui::GetContentRegionAvail().x;
+        const float height = ImGui::GetFrameHeight();
+        ImGui::InvisibleButton(label, ImVec2(width, height));
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 p0 = ImGui::GetItemRectMin();
+        const ImVec2 p1 = ImGui::GetItemRectMax();
+        dl->AddRectFilled(p0, p1, kWell, 6.0f);
+        const float mid = (p0.x + p1.x) * 0.5f;
+        const float value = std::clamp(degPerSec / 200.0f, -1.0f, 1.0f) * (p1.x - p0.x) * 0.5f;
+        dl->AddRectFilled(ImVec2(std::min(mid, mid + value), p0.y + 4), ImVec2(std::max(mid, mid + value), p1.y - 4),
+                          kAccent, 3.0f);
+        dl->AddLine(ImVec2(mid, p0.y + 2), ImVec2(mid, p1.y - 2), kGrid, 1.0f);
+        char text[64];
+        std::snprintf(text, sizeof(text), "%s  %+.1f \xC2\xB0/s", label, degPerSec);
+        dl->AddText(ImVec2(p0.x + 8, p0.y + (height - ImGui::GetTextLineHeight()) * 0.5f), IM_COL32(230, 232, 238, 230),
+                    text);
+    }
+
+    void drawGyroTab() {
+        Profile& p = profile();
+        GyroSettings& g = p.gyro;
+        if (!ImGui::BeginTable("gyroColumns", 2, ImGuiTableFlags_SizingStretchSame)) return;
+        ImGui::TableNextColumn();
+        ImGui::SeparatorText("Gyro aiming");
+        ImGui::PushItemWidth(-ImGui::GetFontSize() * 10.0f);
+        changed_ |= enumCombo("Gyro", g.activation, gyroActivationLabel);
+        helpMarker("Turn and tilt the controller to aim. The gyro adds to the right stick: the stick still does big "
+                   "turns while small wrist movements do the fine aim. \"While a button is held\" with L2 turns it on "
+                   "only while you aim down sights.");
+        ImGui::BeginDisabled(g.activation == GyroActivation::Off);
+        if (g.activation == GyroActivation::WhileHeld || g.activation == GyroActivation::Toggle) {
+            if (ImGui::BeginCombo("Button", std::string(buttonLabel(g.button)).c_str())) {
                 for (int i = 0; i < kButtonCount; ++i) {
-                    const Button option = buttonAt(i);
-                    if (!isRemapTarget(option)) continue;
-                    if (ImGui::Selectable(std::string(buttonLabel(option)).c_str(), target == option)) {
-                        target = option;
+                    const Button b = buttonAt(i);
+                    if (!isPhysicalButton(b)) continue;
+                    if (ImGui::Selectable(std::string(buttonLabel(b)).c_str(), g.button == b)) {
+                        g.button = b;
                         changed_ = true;
                     }
                 }
                 ImGui::EndCombo();
             }
         }
-        ImGui::PopID();
+        changed_ |= ImGui::SliderFloat("Sensitivity", &g.sensitivity, 0.25f, 10.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        helpMarker("How far the aim moves for the same wrist movement. At 1.0 the stick is fully pushed when you "
+                   "turn the controller at 360\xC2\xB0/s, at 4.0 already at 90\xC2\xB0/s. It also depends on your "
+                   "in-game sensitivity.");
+        changed_ |= sliderPercent("Vertical speed", &g.verticalRatio, 0, 200, "Up / down speed compared to left / right.");
+        changed_ |= enumCombo("Turn with", g.horizontalAxis, gyroAxisLabel);
+        changed_ |= ImGui::SliderFloat("Dead zone", &g.deadzone, 0.0f, 10.0f, "%.1f \xC2\xB0/s", ImGuiSliderFlags_AlwaysClamp);
+        helpMarker("Rotation slower than this is ignored, so hand tremor and sensor noise do not move the aim.");
+        changed_ |= sliderPercent("Smoothing", &g.smoothing, 0, 100,
+                                  "Smooths slow, shaky movements only. Fast flicks always stay instant.");
+        changed_ |= sliderPercent("Anti-dead zone", &g.antiDeadzone, 0, 60,
+                                  "Minimum right stick push as soon as the gyro moves, so small wrist movements get "
+                                  "past the game's own stick dead zone. Set it to about the game's dead zone.");
+        changed_ |= ImGui::Checkbox("Invert X", &g.invertX);
+        ImGui::SameLine();
+        changed_ |= ImGui::Checkbox("Invert Y", &g.invertY);
+        ImGui::EndDisabled();
+        ImGui::PopItemWidth();
+
+        ImGui::SeparatorText("Calibration");
+        ImGui::TextWrapped("Put the controller down on a flat surface and click Calibrate. This removes gyro drift so "
+                           "the aim does not creep while you hold still.");
+        drawCalibrationControls(Calibrating::Gyro, "Calibrate gyro", gyroCalMessage_);
+
+        ImGui::TableNextColumn();
+        ImGui::SeparatorText("Live");
+        const auto& bias = cfg_.settings.gyroBias;
+        auto rate = [&](size_t i) {
+            return (static_cast<float>(status_.input.motion.gyro[i]) - bias[i]) / kGyroCountsPerDegPerSec;
+        };
+        drawRateBar("Yaw (turn)", rate(1));
+        drawRateBar("Pitch (tilt up/down)", rate(0));
+        drawRateBar("Roll (tilt left/right)", rate(2));
+        ImGui::AlignTextToFramePadding();
+        statusDot(status_.gyroActive ? kGood : kGrid);
+        ImGui::TextUnformatted(status_.gyroActive ? "Gyro aiming is on" : "Gyro aiming is off");
+        const float size = std::min(ImGui::GetFontSize() * 13.0f, ImGui::GetContentRegionAvail().x);
+        drawStickView("gyroStick", size, p.rightStick, status_.input.rx, status_.input.ry, status_.output.rx,
+                      status_.output.ry);
+        ImGui::TextDisabled("Right stick output, gyro included.");
+        ImGui::EndTable();
     }
 
-    void drawButtonGroup(const char* title, std::initializer_list<Button> buttons) {
-        ImGui::SeparatorText(title);
-        if (ImGui::BeginTable(title, 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
-            ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-            ImGui::TableSetupColumn("Sends", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-            for (Button b : buttons) drawButtonRow(b);
-            ImGui::EndTable();
+    // -- calibration ----------------------------------------------------------
+    void drawCalibrationControls(Calibrating kind, const char* label, const std::string& message) {
+        ImGui::BeginDisabled(calibrating_ != Calibrating::None);
+        if (ImGui::Button(label)) {
+            calibrating_ = kind;
+            calibrationStart_ = now_;
+            calibrationSamples_ = 0;
+            calibrationSum_.fill(0.0);
+            calibrationMin_.fill(1e9);
+            calibrationMax_.fill(-1e9);
         }
-    }
-
-    void drawButtonsTab() {
-        if (ImGui::BeginTable("buttonColumns", 2, ImGuiTableFlags_SizingStretchSame)) {
-            ImGui::TableNextColumn();
-            drawButtonGroup("Back buttons", {Button::PaddleLeft, Button::PaddleRight});
-            drawButtonGroup("Face buttons", {Button::Cross, Button::Circle, Button::Square, Button::Triangle});
-            drawButtonGroup("Shoulders and sticks", {Button::L1, Button::R1, Button::L3, Button::R3});
-            ImGui::TableNextColumn();
-            drawButtonGroup("Edge Fn buttons", {Button::FnLeft, Button::FnRight});
-            drawButtonGroup("D-pad", {Button::DpadUp, Button::DpadDown, Button::DpadLeft, Button::DpadRight});
-            drawButtonGroup("System", {Button::Create, Button::Options, Button::PS, Button::Touchpad, Button::Mute});
-            ImGui::EndTable();
-        }
-        ImGui::Spacing();
-        if (ImGui::Button("Reset buttons to default")) {
-            profile().buttons = defaultButtonMap();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button(kind == Calibrating::Sticks ? "Reset##sticks" : "Reset##gyro")) {
+            if (kind == Calibrating::Sticks) {
+                cfg_.settings.leftStickCenter = {};
+                cfg_.settings.rightStickCenter = {};
+                stickCalMessage_ = "Stick calibration cleared.";
+            } else {
+                cfg_.settings.gyroBias = {};
+                gyroCalMessage_ = "Gyro calibration cleared.";
+            }
             changed_ = true;
         }
-        ImGui::SameLine();
-        ImGui::TextDisabled("L2 / R2 targets press the trigger fully. The back buttons need a DualSense Edge.");
+        if (!message.empty()) {
+            ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", message.c_str());
+        }
+    }
+
+    void updateCalibration(double now) {
+        if (calibrating_ == Calibrating::None) return;
+        const bool sticks = calibrating_ == Calibrating::Sticks;
+        std::string& message = sticks ? stickCalMessage_ : gyroCalMessage_;
+        if (!status_.connected) {
+            message = "Connect the controller first.";
+            calibrating_ = Calibrating::None;
+            return;
+        }
+        const InputState& in = status_.input;
+        const std::array<double, 4> sample =
+            sticks ? std::array<double, 4>{in.lx, in.ly, in.rx, in.ry}
+                   : std::array<double, 4>{static_cast<double>(in.motion.gyro[0]), static_cast<double>(in.motion.gyro[1]),
+                                           static_cast<double>(in.motion.gyro[2]), 0.0};
+        for (size_t i = 0; i < 4; ++i) {
+            calibrationSum_[i] += sample[i];
+            calibrationMin_[i] = std::min(calibrationMin_[i], sample[i]);
+            calibrationMax_[i] = std::max(calibrationMax_[i], sample[i]);
+        }
+        ++calibrationSamples_;
+        const double elapsed = now - calibrationStart_;
+        if (elapsed < 2.0) {
+            char text[80];
+            std::snprintf(text, sizeof(text), sticks ? "Hands off the sticks... %.1f s" : "Keep the controller still... %.1f s",
+                          2.0 - elapsed);
+            message = text;
+            return;
+        }
+        calibrating_ = Calibrating::None;
+        if (calibrationSamples_ < 10) {
+            message = "Not enough data - try again with the EdgePad window in front.";
+            return;
+        }
+        std::array<double, 4> mean{};
+        double spread = 0.0;
+        for (size_t i = 0; i < 4; ++i) {
+            mean[i] = calibrationSum_[i] / calibrationSamples_;
+            spread = std::max(spread, calibrationMax_[i] - calibrationMin_[i]);
+        }
+        char text[160];
+        if (sticks) {
+            if (spread > 0.08) {
+                message = "A stick moved - keep your thumbs off the sticks and try again.";
+                return;
+            }
+            cfg_.settings.leftStickCenter = {static_cast<float>(mean[0]), static_cast<float>(mean[1])};
+            cfg_.settings.rightStickCenter = {static_cast<float>(mean[2]), static_cast<float>(mean[3])};
+            std::snprintf(text, sizeof(text), "Done. Resting offset left %+.1f%% / %+.1f%%, right %+.1f%% / %+.1f%%",
+                          mean[0] * 100.0, mean[1] * 100.0, mean[2] * 100.0, mean[3] * 100.0);
+        } else {
+            if (spread > 12.0 * kGyroCountsPerDegPerSec) {
+                message = "The controller moved - put it down on a flat surface and try again.";
+                return;
+            }
+            cfg_.settings.gyroBias = {static_cast<float>(mean[0]), static_cast<float>(mean[1]), static_cast<float>(mean[2])};
+            const double drift = std::sqrt(mean[0] * mean[0] + mean[1] * mean[1] + mean[2] * mean[2]) / kGyroCountsPerDegPerSec;
+            std::snprintf(text, sizeof(text), "Done. Removed %.2f \xC2\xB0/s of drift.", drift);
+        }
+        message = text;
+        changed_ = true;
     }
 
     // -- settings -------------------------------------------------------------
@@ -937,6 +1264,11 @@ private:
                           "only while you move the stick.");
         ImGui::BulletText("PlayStation (DualShock 4) output passes gyro, accelerometer and touchpad to games.");
         ImGui::BulletText("Trigger stop + resistance wall: shorter trigger pulls like the Edge's hardware stops.");
+        ImGui::BulletText("Gyro: turn / tilt the controller to fine-aim, e.g. only while L2 is held. Calibrate it once.");
+        ImGui::BulletText("Buttons can send keyboard keys and mouse buttons, and each can be a toggle or turbo.");
+        ImGui::BulletText("Shift layer: hold the shift button (a back button works well) for a second set of binds.");
+        ImGui::BulletText("Touchpad zones: split the touchpad into 2 or 4 extra buttons.");
+        ImGui::BulletText("Drifting stick? Sticks tab -> Calibrate sticks.");
         ImGui::PopTextWrapPos();
         ImGui::Spacing();
         const std::string repoUrl = std::string("https://github.com/") + build::kRepository;
@@ -959,6 +1291,16 @@ private:
     bool dirty_ = false;
     double lastEdit_ = 0.0;
     bool restartRequested_ = false;
+    Calibrating calibrating_ = Calibrating::None;
+    double calibrationStart_ = 0.0;
+    double now_ = 0.0;
+    int calibrationSamples_ = 0;
+    std::array<double, 4> calibrationSum_{};
+    std::array<double, 4> calibrationMin_{};
+    std::array<double, 4> calibrationMax_{};
+    std::string stickCalMessage_;
+    std::string gyroCalMessage_;
+    bool editingShift_ = false;
     int leftDrag_ = -1;
     int rightDrag_ = -1;
     std::array<char, 64> renameBuffer_{};
@@ -976,7 +1318,7 @@ int runGui(Engine& engine, const ConfigStore& store, Updater& updater, GuiOption
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
-    GLFWwindow* window = glfwCreateWindow(1240, 800, "EdgePad", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1240, 860, "EdgePad", nullptr, nullptr);
     if (window == nullptr) {
         glfwTerminate();
         return 2;

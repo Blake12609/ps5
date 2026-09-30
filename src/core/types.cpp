@@ -34,6 +34,12 @@ constexpr std::array<ButtonInfo, kButtonCount> kButtons{{
     {"paddle_right", "Right back button"},
     {"fn_left", "Left Fn"},
     {"fn_right", "Right Fn"},
+    {"touch_left", "Touchpad left"},
+    {"touch_right", "Touchpad right"},
+    {"touch_top_left", "Touchpad top-left"},
+    {"touch_top_right", "Touchpad top-right"},
+    {"touch_bottom_left", "Touchpad bottom-left"},
+    {"touch_bottom_right", "Touchpad bottom-right"},
 }};
 
 }  // namespace
@@ -55,6 +61,8 @@ std::optional<Button> buttonFromId(std::string_view id) {
     return std::nullopt;
 }
 
+bool isPhysicalButton(Button b) { return b < Button::TouchLeft; }
+
 bool isRemapSource(Button b) { return b != Button::L2 && b != Button::R2 && b != Button::Count; }
 
 bool isRemapTarget(Button b) {
@@ -64,6 +72,12 @@ bool isRemapTarget(Button b) {
         case Button::PaddleRight:
         case Button::FnLeft:
         case Button::FnRight:
+        case Button::TouchLeft:
+        case Button::TouchRight:
+        case Button::TouchTopLeft:
+        case Button::TouchTopRight:
+        case Button::TouchBottomLeft:
+        case Button::TouchBottomRight:
         case Button::Count:
             return false;
         default:

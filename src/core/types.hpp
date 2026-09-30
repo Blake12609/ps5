@@ -5,6 +5,8 @@
 #include <optional>
 #include <string_view>
 
+#include "core/keys.hpp"
+
 namespace edgepad {
 
 // Logical controller buttons, named after the DualSense / DualSense Edge.
@@ -32,6 +34,13 @@ enum class Button : uint8_t {
     PaddleRight,  // DualSense Edge back button (right)
     FnLeft,       // DualSense Edge function button (left)
     FnRight,      // DualSense Edge function button (right)
+    // Touchpad zones (virtual buttons made from where the touchpad is clicked or touched).
+    TouchLeft,
+    TouchRight,
+    TouchTopLeft,
+    TouchTopRight,
+    TouchBottomLeft,
+    TouchBottomRight,
     Count
 };
 
@@ -49,6 +58,8 @@ std::string_view buttonId(Button b);     // stable id used in config files, e.g.
 std::string_view buttonLabel(Button b);  // human readable, e.g. "Left back button"
 std::optional<Button> buttonFromId(std::string_view id);
 
+// A real button on the controller (not a virtual touchpad zone).
+bool isPhysicalButton(Button b);
 // Can the button be used as a remap source? (L2/R2 are analog and handled by trigger settings)
 bool isRemapSource(Button b);
 // Can the button be produced by the virtual controller?
@@ -90,6 +101,7 @@ struct OutputState {
     float l2 = 0.0f, r2 = 0.0f;
     ButtonMask buttons = 0;
     MotionState motion;
+    KeyMask keys;  // keyboard keys / mouse buttons to hold down
     int battery = -1;
     bool charging = false;
 

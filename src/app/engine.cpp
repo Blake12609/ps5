@@ -7,6 +7,7 @@
 
 #include "core/pipeline.hpp"
 #include "platform/hid_device.hpp"
+#include "platform/keyboard.hpp"
 
 namespace edgepad {
 
@@ -107,6 +108,28 @@ void Engine::run() {
         gameLightbar_ = 0;
     };
 
+    // Keyboard keys / mouse buttons for key bindings. Only changes are sent, and everything is
+    // released when the controller goes away or EdgePad stops, so no key can get stuck.
+    std::unique_ptr<KeyboardOutput> keyboard;
+    KeyMask keysDown;
+    bool keyboardFailed = false;
+    auto syncKeys = [&](const KeyMask& wanted) {
+        if (wanted == keysDown || demo_) return;  // demo mode never types real keys
+        if (!keyboard && !keyboardFailed) {
+            std::string error;
+            keyboard = createKeyboardOutput(error);
+            keyboardFailed = !keyboard;
+            std::lock_guard lock(mutex_);
+            status_.keyboardMessage = error;
+        }
+        if (!keyboard) return;
+        for (int i = 1; i < kKeyCount; ++i) {
+            const Key k = static_cast<Key>(i);
+            if (wanted.test(k) != keysDown.test(k)) keyboard->set(k, wanted.test(k));
+        }
+        keysDown = wanted;
+    };
+
     while (!stop_) {
         {
             std::lock_guard lock(mutex_);
@@ -195,6 +218,7 @@ void Engine::run() {
             result = device.read(input, 20);
         }
         if (result == DualSenseDevice::ReadResult::Error) {
+            syncKeys(KeyMask{});
             device.close();
             continue;
         }
@@ -205,6 +229,7 @@ void Engine::run() {
 
             PipelineEvents events;
             const OutputState output = pipeline.process(input, cfg, dt, &events);
+            syncKeys(output.keys);
 
             if (pad && (forceSend || output != lastSent)) {
                 if (pad->send(output)) {
@@ -238,6 +263,7 @@ void Engine::run() {
             status_.charging = input.charging;
             status_.input = input;
             status_.output = output;
+            status_.gyroActive = pipeline.gyroActive();
             status_.activeProfile = cfg.settings.activeProfile;
             status_.enabled = cfg.settings.enabled;
         }
@@ -253,6 +279,7 @@ void Engine::run() {
                                             gameLightbar));
     }
 
+    syncKeys(KeyMask{});
     pad.reset();
     // Leave the controller in a neutral state: no trigger resistance, no rumble.
     dualsense::Effects neutral;
