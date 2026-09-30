@@ -131,12 +131,14 @@ TEST_CASE("RC jitter only wobbles the stick while it is moved") {
         CHECK(out.ry == 0.0f);
     }
     InputState moved;
-    moved.rx = 0.6f;
+    moved.rx = 0.6f;  // pushing right
     const float steady = processStick(0.6f, 0.0f, right).x;
-    const float a = p.process(moved, cfg, 0.004f).rx;
-    const float b = p.process(moved, cfg, 0.004f).rx;
-    CHECK(a != b);  // wobbles while pushed
-    CHECK((a + b) / 2.0f == doctest::Approx(steady));
+    const OutputState a = p.process(moved, cfg, 0.004f);
+    const OutputState b = p.process(moved, cfg, 0.004f);
+    CHECK(a.rx == doctest::Approx(steady));  // aim speed unchanged
+    CHECK(b.rx == doctest::Approx(steady));
+    CHECK(a.ry == doctest::Approx(kRcMaxJitter));  // wobbles up and down across the push
+    CHECK(b.ry == doctest::Approx(-kRcMaxJitter));
 }
 
 TEST_CASE("RC stabilizer smooths movement but lets go instantly") {
@@ -175,6 +177,19 @@ TEST_CASE("games can colour the lightbar when allowed") {
     cfg.settings.gameLightbar = true;
     CHECK(effectsForConfig(cfg, 0, 0, red).lightbar == red);
     CHECK(effectsForConfig(cfg, 0, 0, std::nullopt).lightbar == cfg.active().lightbar);  // game never set one
+}
+
+TEST_CASE("hair trigger in the pipeline releases without letting go") {
+    Config cfg = testConfig();
+    cfg.active().r2.mode = TriggerMode::HairTrigger;
+    Pipeline p;
+    InputState in;
+    in.r2 = 0.5f;
+    CHECK(p.process(in, cfg, 0.004f).r2 == 1.0f);
+    in.r2 = 0.4f;
+    CHECK(p.process(in, cfg, 0.004f).r2 == 0.0f);
+    in.r2 = 0.5f;
+    CHECK(p.process(in, cfg, 0.004f).r2 == 1.0f);
 }
 
 TEST_CASE("effects follow the active profile") {

@@ -110,6 +110,7 @@ json triggerToJson(const TriggerSettings& t) {
         {"resistance", enumId(t.resistance)},
         {"resistance_position", t.resistancePosition},
         {"resistance_strength", t.resistanceStrength},
+        {"hair_reset_distance", t.hairResetDistance},
     };
 }
 
@@ -121,6 +122,7 @@ void triggerFromJson(const json& j, TriggerSettings& t) {
     readEnum(j, "resistance", t.resistance);
     readFloat(j, "resistance_position", t.resistancePosition);
     readInt(j, "resistance_strength", t.resistanceStrength);
+    readFloat(j, "hair_reset_distance", t.hairResetDistance);
 }
 
 json profileToJson(const Profile& p) {

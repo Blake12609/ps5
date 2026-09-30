@@ -83,6 +83,8 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     if (!cfg.settings.enabled) {
         leftFilter_.reset();
         rightFilter_.reset();
+        l2_.reset();
+        r2_.reset();
         out.lx = in.lx;
         out.ly = in.ly;
         out.rx = in.rx;
@@ -101,15 +103,15 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     const Vec2 right = rightFilter_.smooth({in.rx, in.ry}, p.rightStick.rcFilter, dtSeconds, rightActive);
     Vec2 leftOut = processStick(left.x, left.y, p.leftStick);
     Vec2 rightOut = processStick(right.x, right.y, p.rightStick);
-    leftOut = leftFilter_.jitter(leftOut, p.leftStick.rcFilter, leftActive);
-    rightOut = rightFilter_.jitter(rightOut, p.rightStick.rcFilter, rightActive);
+    leftOut = leftFilter_.jitter(leftOut, p.leftStick.rcFilter, dtSeconds, leftActive);
+    rightOut = rightFilter_.jitter(rightOut, p.rightStick.rcFilter, dtSeconds, rightActive);
     if (p.swapSticks) std::swap(leftOut, rightOut);
     out.lx = leftOut.x;
     out.ly = leftOut.y;
     out.rx = rightOut.x;
     out.ry = rightOut.y;
-    out.l2 = processTrigger(in.l2, p.l2);
-    out.r2 = processTrigger(in.r2, p.r2);
+    out.l2 = l2_.apply(in.l2, p.l2);
+    out.r2 = r2_.apply(in.r2, p.r2);
 
     for (int i = 0; i < kButtonCount; ++i) {
         const Button src = buttonAt(i);
@@ -132,6 +134,8 @@ void Pipeline::reset() {
     suppressed_ = 0;
     leftFilter_.reset();
     rightFilter_.reset();
+    l2_.reset();
+    r2_.reset();
 }
 
 }  // namespace edgepad

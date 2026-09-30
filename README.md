@@ -13,7 +13,7 @@ as a single portable executable, and updates itself from this repository's relea
 | **Sticks** | Inner / outer dead zone, **anti-dead zone**, radial or axial dead zone, invert X/Y, swap sticks |
 | **Response curves** | DualSense Edge presets (Default, Quick, Precise, Steady, Digital, Dynamic) with adjustable strength, plus a **Custom** curve you drag with the mouse |
 | **RC filter** | GameSir style, active only while you move the stick. Positive = *stabilizer* (RC low-pass that removes micro-jitter). Negative = *jitter* mode |
-| **Triggers** | Dead zone, **trigger stop** (short trigger range), anti-dead zone, hair trigger, adaptive-trigger **resistance wall** that makes the stop something you can feel |
+| **Triggers** | Dead zone, **trigger stop** (short trigger range), anti-dead zone, **rapid hair trigger** (full press the moment you pull, releases as soon as you ease off, fires again without letting go), adaptive-trigger **resistance wall** that makes the stop something you can feel |
 | **Buttons** | Map any button, including the Edge **back buttons**, to any button or a full L2/R2 press, or disable it |
 | **Profiles** | Up to 16 profiles. **Fn + Cross/Circle/Square/Triangle** switches profile from the controller, like the Edge. Lightbar colour and player LEDs show the active profile |
 | **Controller** | DualSense and DualSense Edge over USB or Bluetooth, battery level, game rumble forwarded back to the controller |
@@ -74,7 +74,7 @@ nothing is added, even with a 0% dead zone or an anti-dead zone, and letting go 
 smoothing tail.
 
 - **Positive values (stabilizer):** a first-order RC low-pass on the raw stick signal. It smooths out micro-stutter so aim feels heavier and more consistent. The filter is time-based, so it feels the same at 250 Hz or 1000 Hz. At +100 the time constant is 40 ms.
-- **Negative values (jitter):** adds a microscopic alternating offset (up to 3% of stick travel) to the output while the stick is moved. It averages out to zero. Some games keep aim assist engaged with this. **Some online games treat it as aim-assist abuse, so check the rules of the game you play.**
+- **Negative values (jitter):** while you move the stick, your aim wobbles a tiny amount side to side across the direction you push. The wobble is up to 6% of stick travel, changes side every 5 ms whatever the polling rate, and averages out to zero. Your aim speed stays the same and the stick never drops back into the game's dead zone. Some games keep aim assist engaged with this. **Some online games treat it as aim-assist abuse, so check the rules of the game you play.**
 
 ## Automatic updates
 

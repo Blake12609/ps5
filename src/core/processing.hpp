@@ -36,13 +36,16 @@ struct StickSettings {
 };
 
 struct TriggerSettings {
-    float deadzone = 0.0f;  // start of the effective range
+    float deadzone = 0.0f;  // start of the effective range (hair trigger: activation point)
     float maxRange = 1.0f;  // end of the effective range (software trigger stop)
     float antiDeadzone = 0.0f;
     TriggerMode mode = TriggerMode::Analog;
     TriggerResistance resistance = TriggerResistance::Off;  // adaptive trigger wall
     float resistancePosition = 0.5f;                        // 0..1 of the trigger travel
     int resistanceStrength = 6;                             // 1..8
+    // Hair trigger: how far the trigger has to come back up to release, and go down again to
+    // fire, anywhere in its travel (rapid trigger). Smaller = faster follow-up shots.
+    float hairResetDistance = 0.04f;
 
     bool operator==(const TriggerSettings&) const = default;
 };
@@ -55,7 +58,9 @@ struct Vec2 {
 // Maximum time constant of the RC low-pass at rcFilter = 1.0 (seconds).
 inline constexpr float kRcMaxTimeConstant = 0.040f;
 // Maximum jitter amplitude at rcFilter = -1.0 (fraction of full stick throw).
-inline constexpr float kRcMaxJitter = 0.03f;
+inline constexpr float kRcMaxJitter = 0.06f;
+// The jitter wobble changes side on a fixed clock, so it looks the same at any polling rate.
+inline constexpr float kRcJitterFlipSeconds = 0.005f;
 // The RC filter only runs once the stick is pushed past its dead zone, and at least this far,
 // so stick noise at rest never triggers it.
 inline constexpr float kRcMinActiveDeflection = 0.03f;
@@ -69,8 +74,25 @@ float applyCurve(float t, Curve curve, float intensity, const std::vector<CurveP
 // Full stick chain: invert -> dead zone -> curve -> anti-dead zone -> outer dead zone.
 Vec2 processStick(float x, float y, const StickSettings& s);
 
-// Trigger chain: dead zone / range -> anti-dead zone, or hair trigger.
+// Hair trigger never fires closer to the top than this, so resting noise cannot fire it.
+inline constexpr float kHairMinActivation = 0.02f;
+
+// Analog trigger chain: dead zone / range -> anti-dead zone. (Hair trigger: see TriggerProcessor.)
 float processTrigger(float value, const TriggerSettings& s);
+
+// Per-trigger processing with the state a hair trigger needs. The hair trigger works like a
+// "rapid trigger": it fires as soon as the trigger leaves its activation point, releases as soon
+// as it comes back up by the reset distance and fires again as soon as it goes down by the same
+// distance - without having to let the trigger go all the way back up.
+class TriggerProcessor {
+public:
+    float apply(float value, const TriggerSettings& s);
+    void reset();
+
+private:
+    bool pressed_ = false;
+    float extreme_ = 0.0f;  // deepest point while pressed, shallowest point while released
+};
 
 // True while the stick is being moved, i.e. pushed past its dead zone.
 bool stickActive(float x, float y, const StickSettings& s);
@@ -81,14 +103,17 @@ class RcFilter {
 public:
     // Stabilizer (strength > 0): RC low-pass on the raw stick, applied before processStick().
     Vec2 smooth(Vec2 raw, float strength, float dtSeconds, bool active);
-    // Jitter (strength < 0): alternating wobble on the processed output, applied after processStick().
-    Vec2 jitter(Vec2 out, float strength, bool active);
+    // Jitter (strength < 0): a small side-to-side wobble across the aim direction, applied to the
+    // processed output. It never shortens the stick vector, so aim speed is unchanged and the
+    // output never drops back into the game's dead zone.
+    Vec2 jitter(Vec2 out, float strength, float dtSeconds, bool active);
     void reset();
 
 private:
     Vec2 state_{};
     bool primed_ = false;
-    uint32_t tick_ = 0;
+    float jitterClock_ = 0.0f;
+    float jitterSide_ = 1.0f;
 };
 
 }  // namespace edgepad

@@ -195,7 +195,7 @@ void statusDot(ImU32 color) {
 }
 
 const char* shapeLabel(DeadzoneShape s) { return s == DeadzoneShape::Axial ? "Axial (per axis)" : "Radial (circle)"; }
-const char* triggerModeLabel(TriggerMode m) { return m == TriggerMode::HairTrigger ? "Hair trigger (digital)" : "Analog"; }
+const char* triggerModeLabel(TriggerMode m) { return m == TriggerMode::HairTrigger ? "Hair trigger (rapid)" : "Analog"; }
 const char* resistanceLabel(TriggerResistance r) { return r == TriggerResistance::Wall ? "Wall (feels like a trigger stop)" : "Off"; }
 
 // ---------------------------------------------------------------------------
@@ -322,11 +322,15 @@ void drawTriggerView(const char* id, const TriggerSettings& t, float raw, float 
     const float mid = (p0.y + p1.y) * 0.5f;
     auto x = [&](float v) { return x0 + clamp01(v) * span; };
 
-    dl->AddRectFilled(ImVec2(x(t.deadzone), p0.y + pad), ImVec2(x(t.maxRange), p1.y - pad), IM_COL32(79, 140, 255, 28), 4.0f);
+    const bool hair = t.mode == TriggerMode::HairTrigger;
+    if (!hair) {
+        dl->AddRectFilled(ImVec2(x(t.deadzone), p0.y + pad), ImVec2(x(t.maxRange), p1.y - pad), IM_COL32(79, 140, 255, 28), 4.0f);
+    }
     dl->AddRectFilled(ImVec2(x0, p0.y + pad), ImVec2(x(raw), mid - 2), kRaw, 4.0f);
     dl->AddRectFilled(ImVec2(x0, mid + 2), ImVec2(x(out), p1.y - pad), kAccent, 4.0f);
-    dl->AddLine(ImVec2(x(t.deadzone), p0.y + 4), ImVec2(x(t.deadzone), p1.y - 4), kBad, 2.0f);
-    dl->AddLine(ImVec2(x(t.maxRange), p0.y + 4), ImVec2(x(t.maxRange), p1.y - 4), kGood, 2.0f);
+    const float start = hair ? std::max(t.deadzone, kHairMinActivation) : t.deadzone;
+    dl->AddLine(ImVec2(x(start), p0.y + 4), ImVec2(x(start), p1.y - 4), kBad, 2.0f);
+    if (!hair) dl->AddLine(ImVec2(x(t.maxRange), p0.y + 4), ImVec2(x(t.maxRange), p1.y - 4), kGood, 2.0f);
     if (t.resistance == TriggerResistance::Wall) {
         dl->AddLine(ImVec2(x(t.resistancePosition), p0.y + 2), ImVec2(x(t.resistancePosition), p1.y - 2), kWarn, 3.0f);
     }
@@ -685,8 +689,9 @@ private:
             "with your thumb off the stick nothing is added, and letting go stops instantly.\n\n"
             "Positive = stabilizer: an RC low-pass filter that removes micro-jitter so aim feels heavier and "
             "steadier (adds a few ms of smoothing at high values).\n\n"
-            "Negative = jitter mode: adds a microscopic alternating wobble while the stick is moved, which "
-            "keeps some games' aim assist engaged. Some online games treat this as aim-assist abuse - check the "
+            "Negative = jitter mode: while the stick is moved the aim wobbles a tiny bit side to side, across "
+            "the direction you push, flipping every 5 ms. Your aim speed stays the same and the stick never "
+            "drops back into the game's dead zone. This keeps some games' aim assist engaged. Some online games treat this as aim-assist abuse - check the "
             "rules of the game you play.\n\nCtrl+click the slider to type an exact value.");
 
         changed_ |= enumCombo("Dead zone shape", s.shape, shapeLabel);
@@ -729,13 +734,27 @@ private:
         ImGui::SeparatorText(title);
         drawTriggerView("bar", t, raw, out);
         ImGui::PushItemWidth(-ImGui::GetFontSize() * 11.0f);
-        changed_ |= sliderPercent("Dead zone (start)", &t.deadzone, 0, 90, "Trigger travel ignored at the start.");
-        changed_ |= sliderPercent("Trigger stop (end)", &t.maxRange, 5, 100,
-                                  "Where the trigger already counts as fully pressed. Short values give "
-                                  "DualSense Edge style short trigger pulls.");
-        changed_ |= sliderPercent("Anti-dead zone", &t.antiDeadzone, 0, 90,
-                                  "Minimum output as soon as the trigger leaves its dead zone.");
         changed_ |= enumCombo("Mode", t.mode, triggerModeLabel);
+        if (t.mode == TriggerMode::HairTrigger) {
+            float activation = std::max(t.deadzone, kHairMinActivation);
+            if (sliderPercent("Activation point", &activation, kHairMinActivation * 100.0f, 50,
+                              "How far you pull before the first shot fires (at least 2%, so resting noise "
+                              "cannot fire it). The game gets a full press instantly.")) {
+                t.deadzone = activation;
+                changed_ = true;
+            }
+            changed_ |= sliderPercent("Reset distance", &t.hairResetDistance, 1, 30,
+                                      "Rapid trigger: the press releases as soon as the trigger comes back up "
+                                      "this far, and fires again as soon as you pull down this far - anywhere in "
+                                      "the travel, no need to let go completely. Smaller = faster follow-up shots.");
+        } else {
+            changed_ |= sliderPercent("Dead zone (start)", &t.deadzone, 0, 90, "Trigger travel ignored at the start.");
+            changed_ |= sliderPercent("Trigger stop (end)", &t.maxRange, 5, 100,
+                                      "Where the trigger already counts as fully pressed. Short values give "
+                                      "DualSense Edge style short trigger pulls.");
+            changed_ |= sliderPercent("Anti-dead zone", &t.antiDeadzone, 0, 90,
+                                      "Minimum output as soon as the trigger leaves its dead zone.");
+        }
         changed_ |= enumCombo("Adaptive resistance", t.resistance, resistanceLabel);
         if (t.resistance == TriggerResistance::Wall) {
             changed_ |= sliderPercent("Wall position", &t.resistancePosition, 0, 90,

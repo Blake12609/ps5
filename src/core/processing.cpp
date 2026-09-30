@@ -110,12 +110,47 @@ Vec2 processStick(float x, float y, const StickSettings& s) {
 float processTrigger(float value, const TriggerSettings& s) {
     const float v = clamp01(value);
     const float lo = std::min(clamp01(s.deadzone), 0.95f);
-    if (s.mode == TriggerMode::HairTrigger) return v > std::max(lo, 0.04f) ? 1.0f : 0.0f;
+    if (s.mode == TriggerMode::HairTrigger) return v > std::max(lo, kHairMinActivation) ? 1.0f : 0.0f;  // stateless view
     if (v <= lo) return 0.0f;
     const float hi = std::max(lo + 0.02f, clamp01(s.maxRange));
     const float t = clamp01((v - lo) / (hi - lo));
     const float ad = clamp01(s.antiDeadzone);
     return ad + (1.0f - ad) * t;
+}
+
+float TriggerProcessor::apply(float value, const TriggerSettings& s) {
+    if (s.mode != TriggerMode::HairTrigger) {
+        reset();
+        return processTrigger(value, s);
+    }
+    const float v = clamp01(value);
+    const float activation = std::max(std::min(clamp01(s.deadzone), 0.9f), kHairMinActivation);
+    const float resetDistance = std::clamp(s.hairResetDistance, 0.01f, 0.5f);
+
+    if (v <= activation) {  // back at the top: always released, next pull fires immediately
+        pressed_ = false;
+        extreme_ = v;
+        return 0.0f;
+    }
+    if (pressed_) {
+        extreme_ = std::max(extreme_, v);
+        if (v <= extreme_ - resetDistance) {  // started coming back up: release right away
+            pressed_ = false;
+            extreme_ = v;
+        }
+    } else {
+        extreme_ = std::min(extreme_, v);
+        if (extreme_ <= activation || v >= extreme_ + resetDistance) {  // pulled again: fire
+            pressed_ = true;
+            extreme_ = v;
+        }
+    }
+    return pressed_ ? 1.0f : 0.0f;
+}
+
+void TriggerProcessor::reset() {
+    pressed_ = false;
+    extreme_ = 0.0f;
 }
 
 bool stickActive(float x, float y, const StickSettings& s) {
@@ -146,24 +181,37 @@ Vec2 RcFilter::smooth(Vec2 raw, float strength, float dtSeconds, bool active) {
     return state_;
 }
 
-Vec2 RcFilter::jitter(Vec2 out, float strength, bool active) {
+Vec2 RcFilter::jitter(Vec2 out, float strength, float dtSeconds, bool active) {
     strength = clamp11(strength);
-    if (!active || strength >= 0.0f) {
-        tick_ = 0;
+    const float magnitude = std::hypot(out.x, out.y);
+    if (!active || strength >= 0.0f || magnitude <= 1e-4f) {
+        jitterClock_ = 0.0f;
+        jitterSide_ = 1.0f;
         return out;
     }
-    // Alternate a tiny offset every report so it averages out to zero.
-    const float amplitude = -strength * kRcMaxJitter;
-    const float sx = (tick_ & 1u) ? amplitude : -amplitude;
-    const float sy = (tick_ & 2u) ? amplitude : -amplitude;
-    ++tick_;
-    return {clamp11(out.x + sx), clamp11(out.y + sy)};
+    // Change side on a fixed clock (not per report) so it is identical at 250 or 1000 Hz.
+    jitterClock_ += std::clamp(dtSeconds, 0.0f, 0.1f);
+    while (jitterClock_ >= kRcJitterFlipSeconds) {
+        jitterClock_ -= kRcJitterFlipSeconds;
+        jitterSide_ = -jitterSide_;
+    }
+    // Offset at right angles to the stick direction: the aim wobbles side to side around the
+    // target while the length of the stick vector (aim speed) never drops.
+    const float amplitude = -strength * kRcMaxJitter * jitterSide_;
+    Vec2 j{out.x - (out.y / magnitude) * amplitude, out.y + (out.x / magnitude) * amplitude};
+    const float length = std::hypot(j.x, j.y);
+    if (length > 1.0f) {
+        j.x /= length;
+        j.y /= length;
+    }
+    return j;
 }
 
 void RcFilter::reset() {
     state_ = {};
     primed_ = false;
-    tick_ = 0;
+    jitterClock_ = 0.0f;
+    jitterSide_ = 1.0f;
 }
 
 }  // namespace edgepad

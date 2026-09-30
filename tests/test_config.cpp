@@ -15,6 +15,7 @@ TEST_CASE("config survives a JSON round trip") {
     cfg.profiles[1].rightStick.customCurve = {{0.2f, 0.3f}, {0.6f, 0.5f}};
     cfg.profiles[0].buttons[static_cast<size_t>(index(Button::PaddleLeft))] = Button::R2;
     cfg.profiles[0].buttons[static_cast<size_t>(index(Button::Create))].reset();
+    cfg.profiles[1].r2.hairResetDistance = 0.08f;
     cfg.profiles[2].hotkey.reset();
     cfg.normalize();
 

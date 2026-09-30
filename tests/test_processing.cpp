@@ -102,6 +102,42 @@ TEST_CASE("trigger dead zone, trigger stop and anti-dead zone") {
     CHECK(processTrigger(0.1001f, t) == doctest::Approx(0.3f).epsilon(0.01));
 }
 
+TEST_CASE("hair trigger fires instantly and works as a rapid trigger") {
+    TriggerSettings t;
+    t.mode = TriggerMode::HairTrigger;
+    t.hairResetDistance = 0.05f;
+    TriggerProcessor p;
+    CHECK(p.apply(0.0f, t) == 0.0f);
+    CHECK(p.apply(0.01f, t) == 0.0f);   // resting noise never fires
+    CHECK(p.apply(0.03f, t) == 1.0f);   // the slightest pull fires a full press
+    CHECK(p.apply(0.8f, t) == 1.0f);
+    CHECK(p.apply(0.77f, t) == 1.0f);   // small wobble while holding keeps it pressed
+    CHECK(p.apply(0.74f, t) == 0.0f);   // coming back up 6% releases, trigger still 74% down
+    CHECK(p.apply(0.6f, t) == 0.0f);
+    CHECK(p.apply(0.64f, t) == 0.0f);
+    CHECK(p.apply(0.66f, t) == 1.0f);   // pulling down 6% fires again without letting go
+    CHECK(p.apply(0.0f, t) == 0.0f);
+    CHECK(p.apply(0.04f, t) == 1.0f);   // after a full release the next pull fires at once
+}
+
+TEST_CASE("hair trigger activation point") {
+    TriggerSettings t;
+    t.mode = TriggerMode::HairTrigger;
+    t.deadzone = 0.3f;
+    TriggerProcessor p;
+    CHECK(p.apply(0.25f, t) == 0.0f);
+    CHECK(p.apply(0.31f, t) == 1.0f);
+    CHECK(p.apply(0.2f, t) == 0.0f);  // above the activation point it is back at "rest"
+}
+
+TEST_CASE("trigger processor in analog mode matches processTrigger") {
+    TriggerSettings t;
+    t.deadzone = 0.1f;
+    t.maxRange = 0.6f;
+    TriggerProcessor p;
+    for (float v : {0.0f, 0.05f, 0.3f, 0.6f, 1.0f}) CHECK(p.apply(v, t) == processTrigger(v, t));
+}
+
 TEST_CASE("hair trigger is fully on or off") {
     TriggerSettings t;
     t.mode = TriggerMode::HairTrigger;
@@ -125,7 +161,7 @@ TEST_CASE("RC filter: zero strength passes the signal through") {
     const Vec2 out = f.smooth({0.3f, -0.2f}, 0.0f, 0.004f, true);
     CHECK(out.x == 0.3f);
     CHECK(out.y == -0.2f);
-    const Vec2 same = f.jitter({0.3f, -0.2f}, 0.0f, true);
+    const Vec2 same = f.jitter({0.3f, -0.2f}, 0.0f, 0.004f, true);
     CHECK(same.x == 0.3f);
     CHECK(same.y == -0.2f);
 }
@@ -159,25 +195,61 @@ TEST_CASE("RC filter: smoothing does not depend on the polling rate") {
     CHECK(a.x == doctest::Approx(b.x).epsilon(0.05));
 }
 
-TEST_CASE("RC filter: jitter is a zero-mean wobble while the stick moves") {
+TEST_CASE("RC filter: jitter wobbles side to side across the aim direction") {
     RcFilter f;
-    float sumX = 0.0f, sumY = 0.0f;
-    for (int i = 0; i < 4; ++i) {
-        const Vec2 out = f.jitter({0.5f, 0.25f}, -1.0f, true);
-        CHECK(std::fabs(out.x - 0.5f) == doctest::Approx(kRcMaxJitter));
-        CHECK(std::fabs(out.y - 0.25f) == doctest::Approx(kRcMaxJitter));
-        sumX += out.x;
-        sumY += out.y;
+    float sum = 0.0f;
+    bool sawUp = false, sawDown = false;
+    for (int i = 0; i < 1000; ++i) {  // one second at 1000 Hz, aiming straight right
+        const Vec2 out = f.jitter({0.5f, 0.0f}, -1.0f, 0.001f, true);
+        CHECK(out.x == doctest::Approx(0.5f));  // speed along the push is untouched
+        CHECK(std::fabs(out.y) == doctest::Approx(kRcMaxJitter));
+        sawUp |= out.y > 0.0f;
+        sawDown |= out.y < 0.0f;
+        sum += out.y;
     }
-    CHECK(sumX / 4.0f == doctest::Approx(0.5f));
-    CHECK(sumY / 4.0f == doctest::Approx(0.25f));
+    CHECK(sawUp);
+    CHECK(sawDown);
+    CHECK(std::fabs(sum / 1000.0f) < 0.005f);  // averages out: no drift
+}
+
+TEST_CASE("RC filter: jitter never shortens the stick vector") {
+    for (float angle = 0.0f; angle < 6.28f; angle += 0.3f) {
+        for (float length : {0.12f, 0.5f, 1.0f}) {
+            RcFilter f;
+            const Vec2 base{length * std::cos(angle), length * std::sin(angle)};
+            for (int i = 0; i < 20; ++i) {
+                const Vec2 out = f.jitter(base, -1.0f, 0.004f, true);
+                const float outLength = std::hypot(out.x, out.y);
+                CHECK(outLength >= length - 1e-5f);  // never back into the game's dead zone
+                CHECK(outLength <= 1.0f + 1e-5f);
+            }
+        }
+    }
+}
+
+TEST_CASE("RC filter: jitter speed does not depend on the polling rate") {
+    auto sideChanges = [](float dt, int reports) {
+        RcFilter f;
+        int changes = 0;
+        float previous = 0.0f;
+        for (int i = 0; i < reports; ++i) {
+            const float y = f.jitter({0.5f, 0.0f}, -1.0f, dt, true).y;
+            if (i > 0 && (y > 0.0f) != (previous > 0.0f)) ++changes;
+            previous = y;
+        }
+        return changes;
+    };
+    const int at250 = sideChanges(0.004f, 250);    // one second at 250 Hz
+    const int at1000 = sideChanges(0.001f, 1000);  // one second at 1000 Hz
+    CHECK(at250 == doctest::Approx(1.0f / kRcJitterFlipSeconds).epsilon(0.02));
+    CHECK(at1000 == doctest::Approx(1.0f / kRcJitterFlipSeconds).epsilon(0.02));
 }
 
 TEST_CASE("RC filter: no jitter while the stick rests") {
     RcFilter f;
     for (int i = 0; i < 8; ++i) {
-        const Vec2 out = f.jitter({0.0f, 0.0f}, -1.0f, false);
-        CHECK(out.x == 0.0f);
-        CHECK(out.y == 0.0f);
+        const Vec2 out = f.jitter({0.4f, 0.1f}, -1.0f, 0.004f, false);
+        CHECK(out.x == 0.4f);
+        CHECK(out.y == 0.1f);
     }
 }

@@ -36,6 +36,8 @@ private:
     ButtonMask suppressed_ = 0;
     RcFilter leftFilter_;
     RcFilter rightFilter_;
+    TriggerProcessor l2_;
+    TriggerProcessor r2_;
 };
 
 }  // namespace edgepad

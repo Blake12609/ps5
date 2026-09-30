@@ -35,6 +35,7 @@ void normalizeTrigger(TriggerSettings& t) {
     t.antiDeadzone = clampRange(t.antiDeadzone, 0.0f, 0.9f);
     t.resistancePosition = clampRange(t.resistancePosition, 0.0f, 0.9f);
     t.resistanceStrength = std::clamp(t.resistanceStrength, 1, 8);
+    t.hairResetDistance = clampRange(t.hairResetDistance, 0.01f, 0.5f);
     if (t.mode >= TriggerMode::Count) t.mode = TriggerMode::Analog;
     if (t.resistance >= TriggerResistance::Count) t.resistance = TriggerResistance::Off;
 }
