@@ -118,6 +118,65 @@ TEST_CASE("swap sticks") {
     CHECK(out.rx == doctest::Approx(1.0f));
 }
 
+TEST_CASE("RC jitter only wobbles the stick while it is moved") {
+    Config cfg = testConfig();
+    StickSettings& right = cfg.active().rightStick;
+    right.deadzone = 0.0f;       // worst case: no dead zone
+    right.antiDeadzone = 0.2f;   // and an anti-dead zone that would amplify any jitter
+    right.rcFilter = -1.0f;
+    Pipeline p;
+    for (int i = 0; i < 8; ++i) {  // hands off the stick: perfectly still output
+        const OutputState out = p.process(InputState{}, cfg, 0.004f);
+        CHECK(out.rx == 0.0f);
+        CHECK(out.ry == 0.0f);
+    }
+    InputState moved;
+    moved.rx = 0.6f;
+    const float steady = processStick(0.6f, 0.0f, right).x;
+    const float a = p.process(moved, cfg, 0.004f).rx;
+    const float b = p.process(moved, cfg, 0.004f).rx;
+    CHECK(a != b);  // wobbles while pushed
+    CHECK((a + b) / 2.0f == doctest::Approx(steady));
+}
+
+TEST_CASE("RC stabilizer smooths movement but lets go instantly") {
+    Config cfg = testConfig();
+    cfg.active().leftStick.rcFilter = 1.0f;
+    Pipeline p;
+    p.process(InputState{}, cfg, 0.004f);
+    InputState pushed;
+    pushed.lx = 1.0f;
+    CHECK(p.process(pushed, cfg, 0.004f).lx < 0.5f);  // smoothed on the way out
+    for (int i = 0; i < 200; ++i) p.process(pushed, cfg, 0.004f);
+    CHECK(p.process(InputState{}, cfg, 0.004f).lx == 0.0f);  // released: no smoothing tail
+}
+
+TEST_CASE("gyro, accelerometer and touchpad pass through to the virtual controller") {
+    Config cfg = testConfig();
+    InputState in;
+    in.motion.gyro = {10, -20, 30};
+    in.motion.accel = {100, 200, -8192};
+    in.motion.timestamp = 12345;
+    in.motion.touch[0] = TouchPoint{true, 2, 640, 480};
+    in.battery = 60;
+    Pipeline p;
+    OutputState out = p.process(in, cfg, 0.004f);
+    CHECK(out.motion == in.motion);
+    CHECK(out.battery == 60);
+    cfg.settings.enabled = false;  // passthrough keeps it too
+    out = p.process(in, cfg, 0.004f);
+    CHECK(out.motion == in.motion);
+}
+
+TEST_CASE("games can colour the lightbar when allowed") {
+    Config cfg = testConfig();
+    const std::array<uint8_t, 3> red{255, 0, 0};
+    CHECK(effectsForConfig(cfg, 0, 0, red).lightbar == cfg.active().lightbar);  // off by default
+    cfg.settings.gameLightbar = true;
+    CHECK(effectsForConfig(cfg, 0, 0, red).lightbar == red);
+    CHECK(effectsForConfig(cfg, 0, 0, std::nullopt).lightbar == cfg.active().lightbar);  // game never set one
+}
+
 TEST_CASE("effects follow the active profile") {
     Config cfg = testConfig();
     cfg.settings.activeProfile = 2;

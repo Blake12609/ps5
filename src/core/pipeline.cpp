@@ -31,10 +31,11 @@ ButtonMask fnSourceMask(FnMode mode) {
     return 0;
 }
 
-dualsense::Effects effectsForConfig(const Config& cfg, uint8_t rumbleLarge, uint8_t rumbleSmall) {
+dualsense::Effects effectsForConfig(const Config& cfg, uint8_t rumbleLarge, uint8_t rumbleSmall,
+                                    const std::optional<std::array<uint8_t, 3>>& gameLightbar) {
     dualsense::Effects fx;
     const Profile& p = cfg.active();
-    fx.lightbar = p.lightbar;
+    fx.lightbar = (cfg.settings.gameLightbar && gameLightbar) ? *gameLightbar : p.lightbar;
     if (cfg.settings.enabled) {
         fx.playerLeds = playerLedsForProfile(cfg.settings.activeProfile);
         fx.leftTrigger = dualsense::triggerEffectFor(p.l2);
@@ -76,6 +77,9 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     const ButtonMask usable = pressed & ~fn & ~suppressed_;
 
     OutputState out;
+    out.motion = in.motion;
+    out.battery = in.battery;
+    out.charging = in.charging;
     if (!cfg.settings.enabled) {
         leftFilter_.reset();
         rightFilter_.reset();
@@ -90,10 +94,15 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     }
 
     const Profile& p = cfg.active();
-    const Vec2 left = leftFilter_.apply({in.lx, in.ly}, p.leftStick.rcFilter, dtSeconds);
-    const Vec2 right = rightFilter_.apply({in.rx, in.ry}, p.rightStick.rcFilter, dtSeconds);
+    // RC filter (stabilizer before, jitter after the stick processing), only while the stick moves.
+    const bool leftActive = stickActive(in.lx, in.ly, p.leftStick);
+    const bool rightActive = stickActive(in.rx, in.ry, p.rightStick);
+    const Vec2 left = leftFilter_.smooth({in.lx, in.ly}, p.leftStick.rcFilter, dtSeconds, leftActive);
+    const Vec2 right = rightFilter_.smooth({in.rx, in.ry}, p.rightStick.rcFilter, dtSeconds, rightActive);
     Vec2 leftOut = processStick(left.x, left.y, p.leftStick);
     Vec2 rightOut = processStick(right.x, right.y, p.rightStick);
+    leftOut = leftFilter_.jitter(leftOut, p.leftStick.rcFilter, leftActive);
+    rightOut = rightFilter_.jitter(rightOut, p.rightStick.rcFilter, rightActive);
     if (p.swapSticks) std::swap(leftOut, rightOut);
     out.lx = leftOut.x;
     out.ly = leftOut.y;

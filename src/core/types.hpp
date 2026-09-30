@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -53,11 +54,32 @@ bool isRemapSource(Button b);
 // Can the button be produced by the virtual controller?
 bool isRemapTarget(Button b);
 
+// One finger on the touchpad (DualSense resolution 1920 x 1080).
+struct TouchPoint {
+    bool active = false;
+    uint8_t id = 0;  // tracking number, changes for every new touch
+    uint16_t x = 0;
+    uint16_t y = 0;
+
+    bool operator==(const TouchPoint&) const = default;
+};
+
+// Motion sensors and touchpad, passed through to a virtual PlayStation controller.
+struct MotionState {
+    std::array<int16_t, 3> gyro{};   // raw sensor units: pitch, yaw, roll
+    std::array<int16_t, 3> accel{};  // raw sensor units: x, y, z
+    uint32_t timestamp = 0;          // sensor clock, 1/3 microsecond ticks
+    std::array<TouchPoint, 2> touch{};
+
+    bool operator==(const MotionState&) const = default;
+};
+
 // Raw controller state. Sticks: -1..1 with +x right and +y up. Triggers: 0..1.
 struct InputState {
     float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;
     float l2 = 0.0f, r2 = 0.0f;
     ButtonMask buttons = 0;
+    MotionState motion;
     int battery = -1;  // percent, -1 when unknown
     bool charging = false;
 };
@@ -67,6 +89,9 @@ struct OutputState {
     float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;
     float l2 = 0.0f, r2 = 0.0f;
     ButtonMask buttons = 0;
+    MotionState motion;
+    int battery = -1;
+    bool charging = false;
 
     bool operator==(const OutputState&) const = default;
 };

@@ -65,6 +65,7 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<bool> retryPad_{false};
     std::atomic<uint16_t> rumble_{0};
+    std::atomic<uint32_t> gameLightbar_{0};  // bit 24 = a game set a colour, bits 0-23 = RGB
     std::thread thread_;
 };
 

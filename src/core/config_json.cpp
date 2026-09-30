@@ -187,6 +187,7 @@ std::string configToJson(const Config& cfg) {
              {"output", enumId(cfg.settings.output)},
              {"fn_mode", enumId(cfg.settings.fnMode)},
              {"rumble", cfg.settings.rumble},
+             {"game_lightbar", cfg.settings.gameLightbar},
              {"auto_update", cfg.settings.autoUpdate},
              {"enabled", cfg.settings.enabled},
              {"active_profile", cfg.settings.activeProfile},
@@ -208,6 +209,7 @@ Config configFromJson(const std::string& text, std::string* warning) {
         readEnum(*s, "output", cfg.settings.output);
         readEnum(*s, "fn_mode", cfg.settings.fnMode);
         readBool(*s, "rumble", cfg.settings.rumble);
+        readBool(*s, "game_lightbar", cfg.settings.gameLightbar);
         readBool(*s, "auto_update", cfg.settings.autoUpdate);
         readBool(*s, "enabled", cfg.settings.enabled);
         readInt(*s, "active_profile", cfg.settings.activeProfile);

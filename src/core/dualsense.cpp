@@ -16,6 +16,10 @@ constexpr size_t kR2 = 5;
 constexpr size_t kButtons0 = 7;
 constexpr size_t kButtons1 = 8;
 constexpr size_t kButtons2 = 9;
+constexpr size_t kGyro = 15;       // 3 x int16 LE
+constexpr size_t kAccel = 21;      // 3 x int16 LE
+constexpr size_t kTimestamp = 27;  // uint32 LE
+constexpr size_t kTouch = 32;      // 2 x 4 byte touch points
 constexpr size_t kStatus = 52;
 constexpr size_t kFullBodySize = 53;
 constexpr size_t kUsbInputReportSize = 64;
@@ -87,6 +91,21 @@ ButtonMask decodeButtons(uint8_t b0, uint8_t b1, uint8_t b2, bool extended) {
     return m;
 }
 
+int16_t le16(const uint8_t* p) { return static_cast<int16_t>(p[0] | (p[1] << 8)); }
+
+uint32_t le32(const uint8_t* p) {
+    return uint32_t{p[0]} | (uint32_t{p[1]} << 8) | (uint32_t{p[2]} << 16) | (uint32_t{p[3]} << 24);
+}
+
+TouchPoint decodeTouch(const uint8_t* p) {
+    TouchPoint t;
+    t.active = (p[0] & 0x80) == 0;
+    t.id = p[0] & 0x7F;
+    t.x = static_cast<uint16_t>(p[1] | ((p[2] & 0x0F) << 8));
+    t.y = static_cast<uint16_t>((p[2] >> 4) | (p[3] << 4));
+    return t;
+}
+
 InputState parseFullBody(const uint8_t* body, size_t available) {
     InputState s;
     s.lx = axis(body[kLeftX]);
@@ -96,6 +115,15 @@ InputState parseFullBody(const uint8_t* body, size_t available) {
     s.l2 = static_cast<float>(body[kL2]) / 255.0f;
     s.r2 = static_cast<float>(body[kR2]) / 255.0f;
     s.buttons = decodeButtons(body[kButtons0], body[kButtons1], body[kButtons2], true);
+    if (available >= kTouch + 8) {
+        for (size_t i = 0; i < 3; ++i) {
+            s.motion.gyro[i] = le16(body + kGyro + 2 * i);
+            s.motion.accel[i] = le16(body + kAccel + 2 * i);
+        }
+        s.motion.timestamp = le32(body + kTimestamp);
+        s.motion.touch[0] = decodeTouch(body + kTouch);
+        s.motion.touch[1] = decodeTouch(body + kTouch + 4);
+    }
     if (available >= kFullBodySize) {
         const uint8_t status = body[kStatus];
         const int level = status & 0x0F;
@@ -225,6 +253,17 @@ std::vector<uint8_t> buildOutputReport(const Effects& fx, Connection connection,
         report[kBtOutputReportSize - 1] = static_cast<uint8_t>((crc >> 24) & 0xFF);
     }
     return report;
+}
+
+std::array<uint8_t, 4> encodeDs4Touch(const TouchPoint& touch) {
+    const unsigned x = std::min<unsigned>(touch.x, 1919);
+    const unsigned y = std::min<unsigned>(touch.y * 942u / 1079u, 942);
+    return {
+        static_cast<uint8_t>((touch.active ? 0x00 : 0x80) | (touch.id & 0x7F)),
+        static_cast<uint8_t>(x & 0xFF),
+        static_cast<uint8_t>(((x >> 8) & 0x0F) | ((y & 0x0F) << 4)),
+        static_cast<uint8_t>((y >> 4) & 0xFF),
+    };
 }
 
 uint32_t crc32(const uint8_t* data, size_t length, uint32_t crc) {

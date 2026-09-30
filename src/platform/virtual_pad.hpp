@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -10,8 +11,14 @@
 
 namespace edgepad {
 
-// Game rumble coming back from the virtual controller (0..255 per motor).
-using RumbleCallback = std::function<void(uint8_t largeMotor, uint8_t smallMotor)>;
+// What a game sends back to the virtual controller.
+struct PadFeedback {
+    uint8_t largeMotor = 0;  // 0..255
+    uint8_t smallMotor = 0;
+    bool hasLightbar = false;  // only a virtual DualShock 4 has a lightbar
+    std::array<uint8_t, 3> lightbar{};
+};
+using FeedbackCallback = std::function<void(const PadFeedback&)>;
 
 class VirtualPad {
 public:
@@ -29,7 +36,7 @@ struct PadCreateResult {
 };
 
 // Creates the virtual controller games will see. Windows: ViGEmBus. Linux: uinput.
-PadCreateResult createVirtualPad(OutputKind kind, RumbleCallback onRumble);
+PadCreateResult createVirtualPad(OutputKind kind, FeedbackCallback onFeedback);
 
 // Where users can get the driver needed for virtual controllers on this platform.
 const char* virtualPadDriverUrl();

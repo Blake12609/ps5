@@ -45,7 +45,8 @@ struct Profile {
 struct Settings {
     OutputKind output = OutputKind::Xbox360;
     FnMode fnMode = FnMode::Auto;
-    bool rumble = true;      // forward game rumble to the controller
+    bool rumble = true;         // forward game rumble to the controller
+    bool gameLightbar = false;  // DualShock 4 output: let games set the lightbar colour
     bool autoUpdate = true;  // download and install new releases automatically
     bool enabled = true;     // false = raw passthrough (Fn + Options toggles)
     int activeProfile = 0;

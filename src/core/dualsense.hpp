@@ -61,6 +61,10 @@ struct Effects {
 std::vector<uint8_t> buildOutputReport(const Effects& effects, Connection connection, uint8_t sequence,
                                        bool lightbarSetup);
 
+// Encodes a touchpad finger for a DualShock 4 report: {tracking byte, 3 data bytes}.
+// Rescales from the DualSense touchpad (1920 x 1080) to the DualShock 4 one (1920 x 943).
+std::array<uint8_t, 4> encodeDs4Touch(const TouchPoint& touch);
+
 // CRC-32 (IEEE, reflected) as used by DualSense Bluetooth reports.
 uint32_t crc32(const uint8_t* data, size_t length, uint32_t crc = 0);
 

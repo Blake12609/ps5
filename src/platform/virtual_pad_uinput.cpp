@@ -103,7 +103,7 @@ bool setupAbs(int fd, int code, int min, int max, int fuzz, int flat) {
 
 const char* virtualPadDriverUrl() { return "https://www.kernel.org/doc/html/latest/input/uinput.html"; }
 
-PadCreateResult createVirtualPad(OutputKind kind, RumbleCallback /*onRumble*/) {
+PadCreateResult createVirtualPad(OutputKind kind, FeedbackCallback /*onFeedback*/) {
     PadCreateResult result;
     if (kind == OutputKind::None) {
         result.error = PadError::Unsupported;

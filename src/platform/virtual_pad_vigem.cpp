@@ -5,8 +5,10 @@
 
 #include <ViGEm/Client.h>
 
+#include <algorithm>
 #include <cmath>
 
+#include "core/dualsense.hpp"
 #include "core/processing.hpp"
 
 #if defined(_MSC_VER)
@@ -22,10 +24,18 @@ SHORT toThumb(float v) { return static_cast<SHORT>(std::lround(clamp11(v) * 3276
 BYTE toTrigger(float v) { return static_cast<BYTE>(std::lround(clamp01(v) * 255.0f)); }
 BYTE toDs4Axis(float v) { return static_cast<BYTE>(128 + std::lround(clamp11(v) * 127.0f)); }
 
+void encodeTouch(const TouchPoint& t, BYTE& isUpTrackingNum, BYTE (&data)[3]) {
+    const auto encoded = dualsense::encodeDs4Touch(t);
+    isUpTrackingNum = encoded[0];
+    data[0] = encoded[1];
+    data[1] = encoded[2];
+    data[2] = encoded[3];
+}
+
 class ViGEmPad final : public VirtualPad {
 public:
-    ViGEmPad(PVIGEM_CLIENT client, PVIGEM_TARGET target, OutputKind kind, RumbleCallback onRumble)
-        : client_(client), target_(target), kind_(kind), onRumble_(std::move(onRumble)) {}
+    ViGEmPad(PVIGEM_CLIENT client, PVIGEM_TARGET target, OutputKind kind, FeedbackCallback onFeedback)
+        : client_(client), target_(target), kind_(kind), onFeedback_(std::move(onFeedback)) {}
 
     ~ViGEmPad() override {
         if (kind_ == OutputKind::Xbox360) {
@@ -49,11 +59,17 @@ public:
 
     bool send(const OutputState& s) override {
         if (kind_ == OutputKind::Xbox360) return VIGEM_SUCCESS(vigem_target_x360_update(client_, target_, x360Report(s)));
+        if (extendedReports_) {
+            // Full report: sticks and buttons plus gyro, accelerometer and touchpad.
+            const VIGEM_ERROR err = vigem_target_ds4_update_ex(client_, target_, ds4ReportEx(s));
+            if (err != VIGEM_ERROR_NOT_SUPPORTED) return VIGEM_SUCCESS(err);
+            extendedReports_ = false;  // very old ViGEmBus: fall back to the basic report
+        }
         return VIGEM_SUCCESS(vigem_target_ds4_update(client_, target_, ds4Report(s)));
     }
 
     std::string name() const override {
-        return kind_ == OutputKind::Xbox360 ? "Virtual Xbox 360 controller" : "Virtual DualShock 4 controller";
+        return kind_ == OutputKind::Xbox360 ? "Virtual Xbox 360 controller" : "Virtual PlayStation (DualShock 4) controller";
     }
 
 private:
@@ -137,27 +153,60 @@ private:
         return r;
     }
 
-    static VOID CALLBACK onX360(PVIGEM_CLIENT, PVIGEM_TARGET, UCHAR large, UCHAR small, UCHAR, LPVOID user) {
-        auto* self = static_cast<ViGEmPad*>(user);
-        if (self->onRumble_) self->onRumble_(large, small);
+    DS4_REPORT_EX ds4ReportEx(const OutputState& s) {
+        const DS4_REPORT basic = ds4Report(s);
+        DS4_REPORT_EX ex{};
+        auto& r = ex.Report;
+        r.bThumbLX = basic.bThumbLX;
+        r.bThumbLY = basic.bThumbLY;
+        r.bThumbRX = basic.bThumbRX;
+        r.bThumbRY = basic.bThumbRY;
+        r.wButtons = basic.wButtons;
+        r.bSpecial = basic.bSpecial;
+        r.bTriggerL = basic.bTriggerL;
+        r.bTriggerR = basic.bTriggerR;
+        // DualSense sensor clock ticks every 1/3 us, the DualShock 4 one every 16/3 us.
+        r.wTimestamp = static_cast<USHORT>(s.motion.timestamp / 16);
+        // Both controllers use the same sensor units (1024 per deg/s, 8192 per g) and axes.
+        r.wGyroX = s.motion.gyro[0];
+        r.wGyroY = s.motion.gyro[1];
+        r.wGyroZ = s.motion.gyro[2];
+        r.wAccelX = s.motion.accel[0];
+        r.wAccelY = s.motion.accel[1];
+        r.wAccelZ = s.motion.accel[2];
+        // Battery 0..10 in the low nibble, 0x10 = cable connected (the virtual pad is "wired").
+        const int level = s.battery < 0 ? 10 : std::clamp(s.battery / 10, 0, 10);
+        r.bBatteryLvlSpecial = static_cast<BYTE>(0x10 | level);
+        r.bTouchPacketsN = 1;
+        r.sCurrentTouch.bPacketCounter = touchPacket_++;
+        encodeTouch(s.motion.touch[0], r.sCurrentTouch.bIsUpTrackingNum1, r.sCurrentTouch.bTouchData1);
+        encodeTouch(s.motion.touch[1], r.sCurrentTouch.bIsUpTrackingNum2, r.sCurrentTouch.bTouchData2);
+        return ex;
     }
 
-    static VOID CALLBACK onDs4(PVIGEM_CLIENT, PVIGEM_TARGET, UCHAR large, UCHAR small, DS4_LIGHTBAR_COLOR, LPVOID user) {
+    static VOID CALLBACK onX360(PVIGEM_CLIENT, PVIGEM_TARGET, UCHAR large, UCHAR small, UCHAR, LPVOID user) {
         auto* self = static_cast<ViGEmPad*>(user);
-        if (self->onRumble_) self->onRumble_(large, small);
+        if (self->onFeedback_) self->onFeedback_(PadFeedback{large, small, false, {}});
+    }
+
+    static VOID CALLBACK onDs4(PVIGEM_CLIENT, PVIGEM_TARGET, UCHAR large, UCHAR small, DS4_LIGHTBAR_COLOR color, LPVOID user) {
+        auto* self = static_cast<ViGEmPad*>(user);
+        if (self->onFeedback_) self->onFeedback_(PadFeedback{large, small, true, {color.Red, color.Green, color.Blue}});
     }
 
     PVIGEM_CLIENT client_;
     PVIGEM_TARGET target_;
     OutputKind kind_;
-    RumbleCallback onRumble_;
+    FeedbackCallback onFeedback_;
+    bool extendedReports_ = true;
+    BYTE touchPacket_ = 0;
 };
 
 }  // namespace
 
 const char* virtualPadDriverUrl() { return "https://github.com/nefarius/ViGEmBus/releases/latest"; }
 
-PadCreateResult createVirtualPad(OutputKind kind, RumbleCallback onRumble) {
+PadCreateResult createVirtualPad(OutputKind kind, FeedbackCallback onFeedback) {
     PadCreateResult result;
     if (kind == OutputKind::None) {
         result.error = PadError::Unsupported;
@@ -195,7 +244,7 @@ PadCreateResult createVirtualPad(OutputKind kind, RumbleCallback onRumble) {
         return result;
     }
 
-    auto pad = std::make_unique<ViGEmPad>(client, target, kind, std::move(onRumble));
+    auto pad = std::make_unique<ViGEmPad>(client, target, kind, std::move(onFeedback));
     pad->registerRumble();
     result.pad = std::move(pad);
     return result;

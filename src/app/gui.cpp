@@ -681,12 +681,13 @@ private:
             changed_ = true;
         }
         helpMarker(
-            "GameSir style RC filter.\n\n"
+            "GameSir style RC filter. It only works while you move the stick (pushed past its dead zone): "
+            "with your thumb off the stick nothing is added, and letting go stops instantly.\n\n"
             "Positive = stabilizer: an RC low-pass filter that removes micro-jitter so aim feels heavier and "
             "steadier (adds a few ms of smoothing at high values).\n\n"
             "Negative = jitter mode: adds a microscopic alternating wobble while the stick is moved, which "
             "keeps some games' aim assist engaged. Some online games treat this as aim-assist abuse - check the "
-            "rules of the game you play.\n\nDouble-click the slider to type an exact value; Ctrl+click works too.");
+            "rules of the game you play.\n\nCtrl+click the slider to type an exact value.");
 
         changed_ |= enumCombo("Dead zone shape", s.shape, shapeLabel);
         changed_ |= ImGui::Checkbox("Invert X", &s.invertX);
@@ -830,12 +831,19 @@ private:
         ImGui::PushItemWidth(ImGui::GetFontSize() * 18.0f);
         ImGui::SeparatorText("Controller");
         changed_ |= enumCombo("Virtual controller", cfg_.settings.output, outputKindLabel);
-        helpMarker("What games see. Xbox 360 works with almost every PC game. DualShock 4 shows PlayStation "
-                   "button prompts in games that support it.");
+        helpMarker("What games see. Xbox 360 works with almost every PC game. PlayStation (DualShock 4) shows "
+                   "PlayStation button prompts and also passes the gyro, accelerometer and touchpad through, "
+                   "so motion aiming works in games that support it. ViGEmBus cannot emulate a PS5 "
+                   "controller, so the DualShock 4 is the PlayStation option.");
         changed_ |= enumCombo("Fn button", cfg_.settings.fnMode, fnModeLabel);
         helpMarker("Hold Fn and press Cross / Circle / Square / Triangle to switch profiles, or Options to toggle "
                    "remapping. A regular DualSense can use the Mute button as Fn.");
         changed_ |= ImGui::Checkbox("Forward game rumble to the controller", &cfg_.settings.rumble);
+        ImGui::BeginDisabled(cfg_.settings.output != OutputKind::DualShock4);
+        changed_ |= ImGui::Checkbox("Let games set the lightbar colour", &cfg_.settings.gameLightbar);
+        ImGui::EndDisabled();
+        helpMarker("PlayStation (DualShock 4) output only. Games that colour the lightbar (health, team, police "
+                   "lights...) control it like on a real PlayStation controller. Off = the profile colour.");
         ImGui::PopItemWidth();
         if (status_.padError == PadError::DriverMissing || status_.padError == PadError::Failed ||
             status_.padError == PadError::PermissionDenied) {
@@ -906,7 +914,9 @@ private:
         ImGui::BulletText("Dead zone / anti-dead zone: ignore drift, then jump past the game's own dead zone.");
         ImGui::BulletText("Curves: Quick, Precise, Steady, Digital and Dynamic mirror the DualSense Edge presets; "
                           "Custom lets you drag your own curve.");
-        ImGui::BulletText("RC filter: positive values smooth the stick (stabilizer), negative values add jitter.");
+        ImGui::BulletText("RC filter: positive values smooth the stick (stabilizer), negative values add jitter - "
+                          "only while you move the stick.");
+        ImGui::BulletText("PlayStation (DualShock 4) output passes gyro, accelerometer and touchpad to games.");
         ImGui::BulletText("Trigger stop + resistance wall: shorter trigger pulls like the Edge's hardware stops.");
         ImGui::PopTextWrapPos();
         ImGui::Spacing();

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <optional>
+
 #include "core/dualsense.hpp"
 #include "core/processing.hpp"
 #include "core/settings.hpp"
@@ -16,7 +19,9 @@ struct PipelineEvents {
 ButtonMask fnSourceMask(FnMode mode);
 
 // Lightbar colour, player LEDs (profile slot), adaptive trigger walls and forwarded rumble.
-dualsense::Effects effectsForConfig(const Config& cfg, uint8_t rumbleLarge, uint8_t rumbleSmall);
+// `gameLightbar` is the colour a game set on the virtual DualShock 4, if any.
+dualsense::Effects effectsForConfig(const Config& cfg, uint8_t rumbleLarge, uint8_t rumbleSmall,
+                                    const std::optional<std::array<uint8_t, 3>>& gameLightbar = std::nullopt);
 
 // Turns raw controller input into the virtual controller state for the active profile.
 // Handles Fn combos (Fn + face button = switch profile, Fn + Options = toggle remapping),

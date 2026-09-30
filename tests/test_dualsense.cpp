@@ -59,6 +59,56 @@ TEST_CASE("USB input report") {
     checkSample(*parsed);
 }
 
+TEST_CASE("motion sensors and touchpad are parsed") {
+    std::array<uint8_t, 64> report{};
+    report[0] = kUsbInputReportId;
+    auto body = sampleBody();
+    const int16_t gyro[3] = {-2, 300, -32768};
+    const int16_t accel[3] = {8192, -1, 12};
+    for (size_t i = 0; i < 3; ++i) {
+        body[15 + 2 * i] = static_cast<uint8_t>(gyro[i] & 0xFF);
+        body[16 + 2 * i] = static_cast<uint8_t>((gyro[i] >> 8) & 0xFF);
+        body[21 + 2 * i] = static_cast<uint8_t>(accel[i] & 0xFF);
+        body[22 + 2 * i] = static_cast<uint8_t>((accel[i] >> 8) & 0xFF);
+    }
+    body[27] = 0x78;  // timestamp 0x12345678
+    body[28] = 0x56;
+    body[29] = 0x34;
+    body[30] = 0x12;
+    // Finger 1: id 3 at (1000, 500). Finger 2: lifted.
+    body[32] = 0x03;
+    body[33] = 1000 & 0xFF;
+    body[34] = static_cast<uint8_t>(((1000 >> 8) & 0x0F) | ((500 & 0x0F) << 4));
+    body[35] = static_cast<uint8_t>(500 >> 4);
+    body[36] = 0x80 | 0x04;
+    std::memcpy(report.data() + 1, body.data(), 63);
+
+    const auto parsed = parseInputReport(report.data(), report.size());
+    REQUIRE(parsed);
+    const MotionState& m = parsed->state.motion;
+    CHECK(m.gyro == std::array<int16_t, 3>{-2, 300, -32768});
+    CHECK(m.accel == std::array<int16_t, 3>{8192, -1, 12});
+    CHECK(m.timestamp == 0x12345678u);
+    CHECK(m.touch[0].active);
+    CHECK(m.touch[0].id == 3);
+    CHECK(m.touch[0].x == 1000);
+    CHECK(m.touch[0].y == 500);
+    CHECK_FALSE(m.touch[1].active);
+    CHECK(m.touch[1].id == 4);
+}
+
+TEST_CASE("touch points are re-encoded for a DualShock 4") {
+    TouchPoint corner;
+    corner.active = true;
+    corner.id = 5;
+    corner.x = 1919;
+    corner.y = 1079;  // bottom of the DualSense pad -> bottom of the DualShock 4 pad (942)
+    CHECK(encodeDs4Touch(corner) == std::array<uint8_t, 4>{0x05, 0x7F, 0xE7, 0x3A});
+    TouchPoint lifted;
+    lifted.id = 9;
+    CHECK(encodeDs4Touch(lifted)[0] == (0x80 | 9));
+}
+
 TEST_CASE("Bluetooth full input report") {
     std::array<uint8_t, 78> report{};
     report[0] = kBtInputReportId;

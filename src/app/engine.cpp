@@ -95,8 +95,16 @@ void Engine::run() {
     Clock::time_point rateWindowStart = Clock::now();
     int reportsInWindow = 0;
 
-    const RumbleCallback onRumble = [this](uint8_t large, uint8_t small) {
-        rumble_ = static_cast<uint16_t>((large << 8) | small);
+    const FeedbackCallback onFeedback = [this](const PadFeedback& fb) {
+        rumble_ = static_cast<uint16_t>((fb.largeMotor << 8) | fb.smallMotor);
+        if (fb.hasLightbar) {
+            gameLightbar_ = (1u << 24) | (uint32_t{fb.lightbar[0]} << 16) | (uint32_t{fb.lightbar[1]} << 8) | fb.lightbar[2];
+        }
+    };
+    auto dropPad = [&] {
+        pad.reset();
+        rumble_ = 0;
+        gameLightbar_ = 0;
     };
 
     while (!stop_) {
@@ -117,10 +125,7 @@ void Engine::run() {
             status_.connection = dualsense::Connection::Usb;
         }
         if (!demo_ && !device.isOpen()) {
-            if (pad) {
-                pad.reset();
-                rumble_ = 0;
-            }
+            if (pad) dropPad();
             {
                 std::lock_guard lock(mutex_);
                 status_.connected = false;
@@ -153,14 +158,11 @@ void Engine::run() {
 
         // Virtual controller.
         const OutputKind wanted = cfg.settings.output;
-        if (pad && padKind != wanted) {
-            pad.reset();
-            rumble_ = 0;
-        }
+        if (pad && padKind != wanted) dropPad();
         if (!pad && wanted != OutputKind::None &&
             (wanted != lastAttemptKind || now >= nextPadAttempt || retryPad_.exchange(false))) {
             lastAttemptKind = wanted;
-            PadCreateResult created = createVirtualPad(wanted, onRumble);
+            PadCreateResult created = createVirtualPad(wanted, onFeedback);
             std::lock_guard lock(mutex_);
             if (created.pad) {
                 pad = std::move(created.pad);
@@ -209,8 +211,7 @@ void Engine::run() {
                     lastSent = output;
                     forceSend = false;
                 } else {
-                    pad.reset();
-                    rumble_ = 0;
+                    dropPad();
                     nextPadAttempt = t + std::chrono::seconds(2);
                     std::lock_guard lock(mutex_);
                     status_.padName.clear();
@@ -243,7 +244,13 @@ void Engine::run() {
 
         // Lightbar, player LEDs, adaptive triggers and rumble back to the controller.
         const uint16_t rumble = pad ? rumble_.load() : 0;
-        device.sendEffects(effectsForConfig(cfg, static_cast<uint8_t>(rumble >> 8), static_cast<uint8_t>(rumble & 0xFF)));
+        std::optional<std::array<uint8_t, 3>> gameLightbar;
+        if (const uint32_t lb = gameLightbar_.load(); pad && padKind == OutputKind::DualShock4 && (lb & (1u << 24))) {
+            gameLightbar = std::array<uint8_t, 3>{static_cast<uint8_t>(lb >> 16), static_cast<uint8_t>(lb >> 8),
+                                                  static_cast<uint8_t>(lb)};
+        }
+        device.sendEffects(effectsForConfig(cfg, static_cast<uint8_t>(rumble >> 8), static_cast<uint8_t>(rumble & 0xFF),
+                                            gameLightbar));
     }
 
     pad.reset();

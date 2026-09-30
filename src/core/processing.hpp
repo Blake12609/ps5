@@ -26,8 +26,8 @@ struct StickSettings {
     Curve curve = Curve::Default;
     float curveIntensity = 0.5f;  // 0..1, how strongly the curve bends
     std::vector<CurvePoint> customCurve{{0.25f, 0.15f}, {0.5f, 0.4f}, {0.75f, 0.7f}};
-    // GameSir style RC filter, -1..1. Positive: low-pass "stabilizer" smoothing.
-    // Negative: "jitter" mode, injects a microscopic alternating wobble.
+    // GameSir style RC filter, -1..1, only active while the stick is moved.
+    // Positive: low-pass "stabilizer" smoothing. Negative: "jitter", a microscopic alternating wobble.
     float rcFilter = 0.0f;
     bool invertX = false;
     bool invertY = false;
@@ -56,6 +56,9 @@ struct Vec2 {
 inline constexpr float kRcMaxTimeConstant = 0.040f;
 // Maximum jitter amplitude at rcFilter = -1.0 (fraction of full stick throw).
 inline constexpr float kRcMaxJitter = 0.03f;
+// The RC filter only runs once the stick is pushed past its dead zone, and at least this far,
+// so stick noise at rest never triggers it.
+inline constexpr float kRcMinActiveDeflection = 0.03f;
 
 float clamp01(float v);
 float clamp11(float v);
@@ -69,10 +72,17 @@ Vec2 processStick(float x, float y, const StickSettings& s);
 // Trigger chain: dead zone / range -> anti-dead zone, or hair trigger.
 float processTrigger(float value, const TriggerSettings& s);
 
-// Stateful RC filter applied to the raw stick signal before processStick().
+// True while the stick is being moved, i.e. pushed past its dead zone.
+bool stickActive(float x, float y, const StickSettings& s);
+
+// GameSir style RC filter. It only works while the stick is moved (`active`); at rest the
+// stick is left alone, so there is no smoothing tail and no jitter when you let go.
 class RcFilter {
 public:
-    Vec2 apply(Vec2 in, float strength, float dtSeconds);
+    // Stabilizer (strength > 0): RC low-pass on the raw stick, applied before processStick().
+    Vec2 smooth(Vec2 raw, float strength, float dtSeconds, bool active);
+    // Jitter (strength < 0): alternating wobble on the processed output, applied after processStick().
+    Vec2 jitter(Vec2 out, float strength, bool active);
     void reset();
 
 private:

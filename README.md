@@ -12,12 +12,12 @@ as a single portable executable, and updates itself from this repository's relea
 | --- | --- |
 | **Sticks** | Inner / outer dead zone, **anti-dead zone**, radial or axial dead zone, invert X/Y, swap sticks |
 | **Response curves** | DualSense Edge presets (Default, Quick, Precise, Steady, Digital, Dynamic) with adjustable strength, plus a **Custom** curve you drag with the mouse |
-| **RC filter** | GameSir style. Positive = *stabilizer* (RC low-pass that removes micro-jitter). Negative = *jitter* mode |
+| **RC filter** | GameSir style, active only while you move the stick. Positive = *stabilizer* (RC low-pass that removes micro-jitter). Negative = *jitter* mode |
 | **Triggers** | Dead zone, **trigger stop** (short trigger range), anti-dead zone, hair trigger, adaptive-trigger **resistance wall** that makes the stop something you can feel |
 | **Buttons** | Map any button, including the Edge **back buttons**, to any button or a full L2/R2 press, or disable it |
 | **Profiles** | Up to 16 profiles. **Fn + Cross/Circle/Square/Triangle** switches profile from the controller, like the Edge. Lightbar colour and player LEDs show the active profile |
 | **Controller** | DualSense and DualSense Edge over USB or Bluetooth, battery level, game rumble forwarded back to the controller |
-| **Output** | Virtual **Xbox 360** or **DualShock 4** controller (ViGEmBus) on Windows, uinput on Linux |
+| **Output** | Virtual **Xbox 360** or **PlayStation (DualShock 4)** controller via ViGEmBus on Windows, with gyro, accelerometer and touchpad passed through in PlayStation mode. uinput on Linux |
 | **Portable** | One exe. Settings live in `EdgePad-data/` next to it, so the folder can sit on a USB stick |
 | **Auto update** | Checks GitHub Releases on start, verifies the SHA-256 checksum and swaps in the new exe |
 
@@ -39,6 +39,11 @@ A regular DualSense works too. It has no back buttons, so the **Mute** button ac
 4. Start EdgePad and connect the controller over USB or Bluetooth. It is picked up automatically.
 
 If Steam is running, disable Steam Input's PlayStation support for the virtual controller so you only have one remapping layer.
+
+For PlayStation button prompts, set **Settings → Virtual controller → PlayStation (DualShock 4)**. ViGEmBus can't
+emulate a PS5 controller, so games see a PS4 controller. EdgePad passes the DualSense's gyro, accelerometer and
+touchpad through to it, so motion aiming works in games that support it. You can also let games set the
+lightbar colour, like on a real PlayStation controller.
 
 ## Getting started (Linux)
 
@@ -63,10 +68,13 @@ Buttons pressed as part of an Fn combo are never sent to the game.
 
 ## RC filter
 
-Modelled on the RC filter in GameSir's controller software:
+Modelled on the RC filter in GameSir's controller software. Both modes only work **while you move
+the stick**, meaning while it's pushed past its dead zone (at least 3%). With your thumb off the stick
+nothing is added, even with a 0% dead zone or an anti-dead zone, and letting go stops instantly with no
+smoothing tail.
 
 - **Positive values (stabilizer):** a first-order RC low-pass on the raw stick signal. It smooths out micro-stutter so aim feels heavier and more consistent. The filter is time-based, so it feels the same at 250 Hz or 1000 Hz. At +100 the time constant is 40 ms.
-- **Negative values (jitter):** adds a microscopic alternating offset (up to 3% of stick travel) while the stick is moved. It averages out to zero and stays inside the dead zone when the stick is at rest. Some games keep aim assist engaged with this. **Some online games treat it as aim-assist abuse, so check the rules of the game you play.**
+- **Negative values (jitter):** adds a microscopic alternating offset (up to 3% of stick travel) to the output while the stick is moved. It averages out to zero. Some games keep aim assist engaged with this. **Some online games treat it as aim-assist abuse, so check the rules of the game you play.**
 
 ## Automatic updates
 

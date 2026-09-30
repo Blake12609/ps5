@@ -109,39 +109,61 @@ TEST_CASE("hair trigger is fully on or off") {
     CHECK(processTrigger(0.1f, t) == 1.0f);
 }
 
-TEST_CASE("RC filter: zero strength passes the signal through") {
-    RcFilter f;
-    const Vec2 out = f.apply({0.3f, -0.2f}, 0.0f, 0.004f);
-    CHECK(out.x == 0.3f);
-    CHECK(out.y == -0.2f);
+TEST_CASE("RC filter: the stick counts as moving once it leaves its dead zone") {
+    StickSettings s;
+    s.deadzone = 0.08f;
+    CHECK_FALSE(stickActive(0.0f, 0.0f, s));
+    CHECK_FALSE(stickActive(0.05f, 0.05f, s));
+    CHECK(stickActive(0.2f, 0.0f, s));
+    s.deadzone = 0.0f;  // even without a dead zone, resting noise does not count as movement
+    CHECK_FALSE(stickActive(0.015f, -0.01f, s));
+    CHECK(stickActive(0.05f, 0.0f, s));
 }
 
-TEST_CASE("RC filter: stabilizer is a first order low-pass") {
+TEST_CASE("RC filter: zero strength passes the signal through") {
     RcFilter f;
-    f.apply({0.0f, 0.0f}, 0.5f, 0.004f);
-    const Vec2 first = f.apply({1.0f, 0.0f}, 0.5f, 0.004f);
+    const Vec2 out = f.smooth({0.3f, -0.2f}, 0.0f, 0.004f, true);
+    CHECK(out.x == 0.3f);
+    CHECK(out.y == -0.2f);
+    const Vec2 same = f.jitter({0.3f, -0.2f}, 0.0f, true);
+    CHECK(same.x == 0.3f);
+    CHECK(same.y == -0.2f);
+}
+
+TEST_CASE("RC filter: stabilizer is a first order low-pass while the stick moves") {
+    RcFilter f;
+    f.smooth({0.0f, 0.0f}, 0.5f, 0.004f, false);
+    const Vec2 first = f.smooth({1.0f, 0.0f}, 0.5f, 0.004f, true);
     const float rc = 0.5f * kRcMaxTimeConstant;
     CHECK(first.x == doctest::Approx(0.004f / (rc + 0.004f)));
     Vec2 out{};
-    for (int i = 0; i < 400; ++i) out = f.apply({1.0f, 0.0f}, 0.5f, 0.004f);
+    for (int i = 0; i < 400; ++i) out = f.smooth({1.0f, 0.0f}, 0.5f, 0.004f, true);
     CHECK(out.x == doctest::Approx(1.0f).epsilon(0.001));
+}
+
+TEST_CASE("RC filter: stabilizer stops instantly when the stick is released") {
+    RcFilter f;
+    for (int i = 0; i < 50; ++i) f.smooth({0.9f, 0.1f}, 1.0f, 0.004f, true);
+    const Vec2 released = f.smooth({0.01f, 0.0f}, 1.0f, 0.004f, false);
+    CHECK(released.x == 0.01f);
+    CHECK(released.y == 0.0f);
 }
 
 TEST_CASE("RC filter: smoothing does not depend on the polling rate") {
     RcFilter slow, fast;
-    slow.apply({0.0f, 0.0f}, 0.6f, 0.004f);
-    fast.apply({0.0f, 0.0f}, 0.6f, 0.001f);
+    slow.smooth({0.0f, 0.0f}, 0.6f, 0.004f, false);
+    fast.smooth({0.0f, 0.0f}, 0.6f, 0.001f, false);
     Vec2 a{}, b{};
-    for (int i = 0; i < 10; ++i) a = slow.apply({1.0f, 0.0f}, 0.6f, 0.004f);  // 40 ms at 250 Hz
-    for (int i = 0; i < 40; ++i) b = fast.apply({1.0f, 0.0f}, 0.6f, 0.001f);  // 40 ms at 1000 Hz
+    for (int i = 0; i < 10; ++i) a = slow.smooth({1.0f, 0.0f}, 0.6f, 0.004f, true);  // 40 ms at 250 Hz
+    for (int i = 0; i < 40; ++i) b = fast.smooth({1.0f, 0.0f}, 0.6f, 0.001f, true);  // 40 ms at 1000 Hz
     CHECK(a.x == doctest::Approx(b.x).epsilon(0.05));
 }
 
-TEST_CASE("RC filter: negative strength adds a zero-mean jitter") {
+TEST_CASE("RC filter: jitter is a zero-mean wobble while the stick moves") {
     RcFilter f;
     float sumX = 0.0f, sumY = 0.0f;
     for (int i = 0; i < 4; ++i) {
-        const Vec2 out = f.apply({0.5f, 0.25f}, -1.0f, 0.004f);
+        const Vec2 out = f.jitter({0.5f, 0.25f}, -1.0f, true);
         CHECK(std::fabs(out.x - 0.5f) == doctest::Approx(kRcMaxJitter));
         CHECK(std::fabs(out.y - 0.25f) == doctest::Approx(kRcMaxJitter));
         sumX += out.x;
@@ -151,14 +173,10 @@ TEST_CASE("RC filter: negative strength adds a zero-mean jitter") {
     CHECK(sumY / 4.0f == doctest::Approx(0.25f));
 }
 
-TEST_CASE("RC filter jitter stays inside the dead zone while the stick rests") {
-    StickSettings s;
-    s.deadzone = 0.05f;
-    s.rcFilter = -1.0f;
+TEST_CASE("RC filter: no jitter while the stick rests") {
     RcFilter f;
     for (int i = 0; i < 8; ++i) {
-        const Vec2 raw = f.apply({0.0f, 0.0f}, s.rcFilter, 0.004f);
-        const Vec2 out = processStick(raw.x, raw.y, s);
+        const Vec2 out = f.jitter({0.0f, 0.0f}, -1.0f, false);
         CHECK(out.x == 0.0f);
         CHECK(out.y == 0.0f);
     }

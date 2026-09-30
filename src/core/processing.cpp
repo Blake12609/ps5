@@ -118,34 +118,46 @@ float processTrigger(float value, const TriggerSettings& s) {
     return ad + (1.0f - ad) * t;
 }
 
-Vec2 RcFilter::apply(Vec2 in, float strength, float dtSeconds) {
-    strength = clamp11(strength);
-    if (strength > 0.0f) {
-        if (!primed_) {
-            state_ = in;
-            primed_ = true;
-            return in;
-        }
-        // First order RC low-pass: alpha = dt / (RC + dt). Time based, so the
-        // feel does not change with the controller's polling rate.
-        const float dt = std::clamp(dtSeconds, 0.0005f, 0.1f);
-        const float rc = strength * kRcMaxTimeConstant;
-        const float alpha = dt / (rc + dt);
-        state_.x += alpha * (in.x - state_.x);
-        state_.y += alpha * (in.y - state_.y);
-        return state_;
-    }
+bool stickActive(float x, float y, const StickSettings& s) {
+    return std::hypot(x, y) > std::max(clamp01(s.deadzone), kRcMinActiveDeflection);
+}
 
-    primed_ = false;
-    if (strength < 0.0f) {
-        // Jitter mode: alternate a tiny offset every report so it averages out to zero.
-        const float amplitude = -strength * kRcMaxJitter;
-        const float sx = (tick_ & 1u) ? amplitude : -amplitude;
-        const float sy = (tick_ & 2u) ? amplitude : -amplitude;
-        ++tick_;
-        return {in.x + sx, in.y + sy};
+Vec2 RcFilter::smooth(Vec2 raw, float strength, float dtSeconds, bool active) {
+    strength = clamp11(strength);
+    if (!active || strength <= 0.0f) {
+        // Follow the stick exactly while it rests: letting go stops instantly, and the next
+        // movement is smoothed starting from where the stick really is.
+        state_ = raw;
+        primed_ = true;
+        return raw;
     }
-    return in;
+    if (!primed_) {
+        state_ = raw;
+        primed_ = true;
+        return raw;
+    }
+    // First order RC low-pass: alpha = dt / (RC + dt). Time based, so the
+    // feel does not change with the controller's polling rate.
+    const float dt = std::clamp(dtSeconds, 0.0005f, 0.1f);
+    const float rc = strength * kRcMaxTimeConstant;
+    const float alpha = dt / (rc + dt);
+    state_.x += alpha * (raw.x - state_.x);
+    state_.y += alpha * (raw.y - state_.y);
+    return state_;
+}
+
+Vec2 RcFilter::jitter(Vec2 out, float strength, bool active) {
+    strength = clamp11(strength);
+    if (!active || strength >= 0.0f) {
+        tick_ = 0;
+        return out;
+    }
+    // Alternate a tiny offset every report so it averages out to zero.
+    const float amplitude = -strength * kRcMaxJitter;
+    const float sx = (tick_ & 1u) ? amplitude : -amplitude;
+    const float sy = (tick_ & 2u) ? amplitude : -amplitude;
+    ++tick_;
+    return {clamp11(out.x + sx), clamp11(out.y + sy)};
 }
 
 void RcFilter::reset() {

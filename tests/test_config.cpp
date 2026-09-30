@@ -8,6 +8,7 @@ TEST_CASE("config survives a JSON round trip") {
     Config cfg = Config::defaults();
     cfg.settings.output = OutputKind::DualShock4;
     cfg.settings.fnMode = FnMode::Touchpad;
+    cfg.settings.gameLightbar = true;
     cfg.settings.activeProfile = 1;
     cfg.profiles[1].rightStick.rcFilter = -0.4f;
     cfg.profiles[1].rightStick.curve = Curve::Custom;

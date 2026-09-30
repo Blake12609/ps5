@@ -164,7 +164,7 @@ std::string_view outputKindId(OutputKind k) {
 std::string_view outputKindLabel(OutputKind k) {
     switch (k) {
         case OutputKind::Xbox360: return "Xbox 360 (best game support)";
-        case OutputKind::DualShock4: return "DualShock 4";
+        case OutputKind::DualShock4: return "PlayStation (DualShock 4)";
         case OutputKind::None: return "None (monitor only)";
         case OutputKind::Count: break;
     }
