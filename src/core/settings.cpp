@@ -129,6 +129,11 @@ Config Config::defaults() {
     fps.name = "FPS";
     fps.hotkey = Button::Circle;
     fps.lightbar = {255, 40, 40};
+    // Anti-dead zone needs a small inner dead zone, or resting stick noise would be boosted too.
+    for (StickSettings* stick : {&fps.leftStick, &fps.rightStick}) {
+        stick->deadzone = 0.05f;
+        stick->outerDeadzone = 0.02f;
+    }
     fps.leftStick.antiDeadzone = 0.10f;
     fps.rightStick.antiDeadzone = 0.12f;
     fps.rightStick.curve = Curve::Precise;

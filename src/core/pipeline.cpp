@@ -1,5 +1,6 @@
 #include "core/pipeline.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -151,11 +152,16 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     // Gyro aiming adds to the right stick.
     const Vec2 gyro = gyro_.update(in.motion, p.gyro, cfg.settings.gyroBias, has(pressed, p.gyro.button),
                                    has(newlyPressed, p.gyro.button), dtSeconds);
-    rightOut.x += gyro.x;
-    rightOut.y += gyro.y;
-    if (const float length = std::hypot(rightOut.x, rightOut.y); length > 1.0f) {
-        rightOut.x /= length;
-        rightOut.y /= length;
+    if (gyro.x != 0.0f || gyro.y != 0.0f) {
+        // Never longer than full deflection, or than the stick alone (whose corners may reach a
+        // bit further): without gyro movement the stick stays exactly as it is.
+        const float limit = std::max(1.0f, std::hypot(rightOut.x, rightOut.y));
+        rightOut.x += gyro.x;
+        rightOut.y += gyro.y;
+        if (const float length = std::hypot(rightOut.x, rightOut.y); length > limit) {
+            rightOut.x *= limit / length;
+            rightOut.y *= limit / length;
+        }
     }
     out.lx = leftOut.x;
     out.ly = leftOut.y;

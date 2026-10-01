@@ -87,6 +87,9 @@ struct Settings {
     bool rumble = true;         // forward game rumble to the controller
     bool gameLightbar = false;  // DualShock 4 output: let games set the lightbar colour
     bool autoUpdate = true;  // download and install new releases automatically
+    // Hide the real controller from games (HidHide or exclusive access on Windows, an input grab on
+    // Linux) so they only see EdgePad's virtual controller: no double input.
+    bool hideController = false;
     bool enabled = true;     // false = raw passthrough (Fn + Options toggles)
     int activeProfile = 0;
     // Calibration of this controller (resting offsets).

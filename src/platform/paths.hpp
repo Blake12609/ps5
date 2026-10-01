@@ -20,6 +20,10 @@ std::filesystem::path executableDirectory();
 // per-user config folder when the executable's folder is read-only.
 std::filesystem::path dataDirectory(const std::filesystem::path& overrideDir = {});
 
+// Runs the calling thread ahead of normal programs (games included), so a busy CPU never delays a
+// controller report. Windows only; elsewhere it needs privileges, so it does nothing.
+void raiseThreadPriority();
+
 bool openInFileBrowser(const std::filesystem::path& path);
 bool openUrl(const std::string& url);
 

@@ -125,6 +125,12 @@ fs::path dataDirectory(const fs::path& overrideDir) {
     return fallback;
 }
 
+void raiseThreadPriority() {
+#if defined(_WIN32)
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+#endif
+}
+
 bool openInFileBrowser(const fs::path& path) {
 #if defined(_WIN32)
     return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;

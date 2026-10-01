@@ -4,10 +4,13 @@
 #include <cmath>
 #include <iterator>
 #include <memory>
+#include <optional>
 
 #include "core/pipeline.hpp"
+#include "platform/controller_hide.hpp"
 #include "platform/hid_device.hpp"
 #include "platform/keyboard.hpp"
+#include "platform/paths.hpp"
 
 namespace edgepad {
 
@@ -35,7 +38,8 @@ InputState simulatedInput(float t) {
 
 }  // namespace
 
-Engine::Engine(Config config, bool demo) : shared_(std::move(config)), demo_(demo) {
+Engine::Engine(Config config, bool demo, std::filesystem::path dataDir)
+    : shared_(std::move(config)), demo_(demo), dataDir_(std::move(dataDir)) {
     shared_.normalize();
     status_.activeProfile = shared_.settings.activeProfile;
     status_.enabled = shared_.settings.enabled;
@@ -79,7 +83,12 @@ EngineStatus Engine::status() const {
 void Engine::retryVirtualPad() { retryPad_ = true; }
 
 void Engine::run() {
+    raiseThreadPriority();
     Config cfg = config();
+    // Hides the real controller from games (never in demo mode). Undoes everything on exit.
+    std::optional<ControllerHider> hider;
+    if (!demo_) hider.emplace(dataDir_ / "hide-controller-state.txt");
+    bool hideApplied = false;  // the open controller was set up with "hide controller"
     DualSenseDevice device;
     Pipeline pipeline;
 
@@ -101,6 +110,39 @@ void Engine::run() {
         if (fb.hasLightbar) {
             gameLightbar_ = (1u << 24) | (uint32_t{fb.lightbar[0]} << 16) | (uint32_t{fb.lightbar[1]} << 8) | fb.lightbar[2];
         }
+    };
+    auto setHideStatus = [&](bool hidden, std::string message) {
+        std::lock_guard lock(mutex_);
+        status_.controllerHidden = hidden;
+        status_.hideMessage = std::move(message);
+    };
+    // Opens the controller, hidden from games when that is wanted.
+    auto openController = [&](const HidDeviceInfo& info) {
+        const bool hide = cfg.settings.hideController;
+        std::string reason;
+        const bool exclusive = hide && hider->needsExclusiveOpen(reason);
+        std::string error;
+        bool inUse = false;
+        bool hidden = false;
+        std::string message;
+        bool opened = device.open(info, error, exclusive, &inUse);
+        if (!opened && exclusive) {
+            opened = device.open(info, error);  // still use it, just not hidden
+            message = inUse ? "Not hidden: another program (Steam, DS4Windows, a game...) has the controller open. Close "
+                              "it and reconnect the controller, or install HidHide (" + reason + ")."
+                            : "Not hidden: " + error + " (" + reason + ").";
+        } else if (opened && exclusive) {
+            hidden = true;
+            message = "Hidden from games: EdgePad has the controller to itself (" + reason + ").";
+        } else if (opened && hide) {
+            hidden = hider->hide(info.path, message);
+            if (!hidden) message = "Not hidden: " + message + ".";
+        }
+        if (!opened) return false;
+        if (!hide) hider->restore();  // switched off while the controller was away
+        hideApplied = hide;
+        setHideStatus(hidden, hide ? message : std::string());
+        return true;
     };
     auto dropPad = [&] {
         pad.reset();
@@ -160,8 +202,7 @@ void Engine::run() {
             if (now >= nextScan) {
                 nextScan = now + std::chrono::seconds(1);
                 for (const auto& info : enumerateControllers()) {
-                    std::string error;
-                    if (device.open(info, error)) {
+                    if (openController(info)) {
                         pipeline.reset();
                         forceSend = true;
                         lastReport = Clock::now();
@@ -177,6 +218,18 @@ void Engine::run() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 continue;
             }
+        }
+
+        // "Hide controller" switched on or off: open the controller again the new way.
+        if (!demo_ && device.isOpen() && cfg.settings.hideController != hideApplied) {
+            syncKeys(KeyMask{});
+            device.close();
+            if (!cfg.settings.hideController) {
+                hider->restore();
+                setHideStatus(false, {});
+            }
+            nextScan = now;
+            continue;
         }
 
         // Virtual controller.
@@ -286,6 +339,7 @@ void Engine::run() {
     neutral.lightbar = {0, 0, 64};
     device.sendEffects(neutral);
     device.close();
+    if (hider) hider->restore();  // the controller is visible to other programs again
 }
 
 }  // namespace edgepad

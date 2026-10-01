@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/axis.hpp"
 #include "core/dualsense.hpp"
 #include "core/processing.hpp"
 
@@ -20,9 +21,11 @@
 namespace edgepad {
 namespace {
 
-SHORT toThumb(float v) { return static_cast<SHORT>(std::lround(clamp11(v) * 32767.0f)); }
-BYTE toTrigger(float v) { return static_cast<BYTE>(std::lround(clamp01(v) * 255.0f)); }
-BYTE toDs4Axis(float v) { return static_cast<BYTE>(128 + std::lround(clamp11(v) * 127.0f)); }
+// Exact 1:1 conversions (see core/axis.hpp): an unchanged stick reaches the game exactly as the
+// controller sent it, full deflection included.
+SHORT toThumb(float v) { return stickToThumb(v); }
+BYTE toTrigger(float v) { return triggerToRaw(v); }
+BYTE toDs4Axis(float v) { return stickToRaw(v); }
 
 void encodeTouch(const TouchPoint& t, BYTE& isUpTrackingNum, BYTE (&data)[3]) {
     const auto encoded = dualsense::encodeDs4Touch(t);

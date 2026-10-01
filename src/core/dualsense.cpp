@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/axis.hpp"
+
 namespace edgepad::dualsense {
 namespace {
 
@@ -48,7 +50,7 @@ constexpr uint8_t kLightbarSetupLightOut = 0x02;
 constexpr uint8_t kBtOutputTag = 0x10;
 constexpr uint8_t kBtCrcSeedOutput = 0xA2;
 
-float axis(uint8_t raw) { return clamp11((static_cast<float>(raw) - 128.0f) / 127.0f); }
+float axis(uint8_t raw) { return stickFromRaw(raw); }
 
 ButtonMask dpadButtons(uint8_t hat) {
     switch (hat & 0x0F) {
@@ -112,8 +114,8 @@ InputState parseFullBody(const uint8_t* body, size_t available) {
     s.ly = -axis(body[kLeftY]);  // HID: 0 = up. Internally +y is up.
     s.rx = axis(body[kRightX]);
     s.ry = -axis(body[kRightY]);
-    s.l2 = static_cast<float>(body[kL2]) / 255.0f;
-    s.r2 = static_cast<float>(body[kR2]) / 255.0f;
+    s.l2 = triggerFromRaw(body[kL2]);
+    s.r2 = triggerFromRaw(body[kR2]);
     s.buttons = decodeButtons(body[kButtons0], body[kButtons1], body[kButtons2], true);
     if (available >= kTouch + 8) {
         for (size_t i = 0; i < 3; ++i) {
@@ -167,8 +169,8 @@ std::optional<ParsedReport> parseInputReport(const uint8_t* data, size_t length)
         s.rx = axis(data[3]);
         s.ry = -axis(data[4]);
         s.buttons = decodeButtons(data[5], data[6], data[7], false);
-        s.l2 = static_cast<float>(data[8]) / 255.0f;
-        s.r2 = static_cast<float>(data[9]) / 255.0f;
+        s.l2 = triggerFromRaw(data[8]);
+        s.r2 = triggerFromRaw(data[9]);
         return ParsedReport{s, Connection::Bluetooth};
     }
     return std::nullopt;

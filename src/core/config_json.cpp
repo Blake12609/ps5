@@ -319,6 +319,7 @@ std::string configToJson(const Config& cfg) {
              {"rumble", cfg.settings.rumble},
              {"game_lightbar", cfg.settings.gameLightbar},
              {"auto_update", cfg.settings.autoUpdate},
+             {"hide_controller", cfg.settings.hideController},
              {"enabled", cfg.settings.enabled},
              {"active_profile", cfg.settings.activeProfile},
              {"left_stick_center", floats(cfg.settings.leftStickCenter)},
@@ -344,6 +345,7 @@ Config configFromJson(const std::string& text, std::string* warning) {
         readBool(*s, "rumble", cfg.settings.rumble);
         readBool(*s, "game_lightbar", cfg.settings.gameLightbar);
         readBool(*s, "auto_update", cfg.settings.autoUpdate);
+        readBool(*s, "hide_controller", cfg.settings.hideController);
         readBool(*s, "enabled", cfg.settings.enabled);
         readInt(*s, "active_profile", cfg.settings.activeProfile);
         readFloats(*s, "left_stick_center", cfg.settings.leftStickCenter);
@@ -363,6 +365,20 @@ Config configFromJson(const std::string& text, std::string* warning) {
         for (auto& p : cfg.profiles) {
             for (TriggerSettings* t : {&p.l2, &p.r2}) {
                 if (std::fabs(t->hairResetDistance - 0.04f) < 1e-4f) t->hairResetDistance = kHairDefaultReset;
+            }
+        }
+    }
+    if (version < 3) {
+        // Before version 3 every stick started with a 5% dead zone and a 2% outer dead zone, on top
+        // of the game's own. Sticks still on exactly those defaults (and with no anti-dead zone,
+        // which needs an inner dead zone) move to the new 1:1 defaults.
+        for (auto& p : cfg.profiles) {
+            for (StickSettings* st : {&p.leftStick, &p.rightStick}) {
+                if (std::fabs(st->deadzone - 0.05f) < 1e-4f && std::fabs(st->outerDeadzone - 0.02f) < 1e-4f &&
+                    st->antiDeadzone <= 0.0f) {
+                    st->deadzone = 0.0f;
+                    st->outerDeadzone = 0.0f;
+                }
             }
         }
     }

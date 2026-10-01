@@ -12,7 +12,7 @@
 #include <cstring>
 #include <map>
 
-#include "core/processing.hpp"
+#include "core/axis.hpp"
 
 namespace edgepad {
 namespace {
@@ -48,12 +48,13 @@ public:
             ok &= emit(EV_KEY, code, value);
         }
 
-        auto thumb = [](float v) { return static_cast<int>(std::lround(clamp11(v) * 32767.0f)); };
-        auto trigger = [](float v) { return static_cast<int>(std::lround(clamp01(v) * 255.0f)); };
+        // Exact 1:1 conversions (see core/axis.hpp).
+        auto thumb = [](float v) { return static_cast<int>(stickToThumb(v)); };
+        auto trigger = [](float v) { return static_cast<int>(triggerToRaw(v)); };
         ok &= emit(EV_ABS, ABS_X, thumb(s.lx));
-        ok &= emit(EV_ABS, ABS_Y, -thumb(s.ly));  // evdev: down is positive
+        ok &= emit(EV_ABS, ABS_Y, thumb(-s.ly));  // evdev: down is positive
         ok &= emit(EV_ABS, ABS_RX, thumb(s.rx));
-        ok &= emit(EV_ABS, ABS_RY, -thumb(s.ry));
+        ok &= emit(EV_ABS, ABS_RY, thumb(-s.ry));
         ok &= emit(EV_ABS, ABS_Z, trigger(s.l2));
         ok &= emit(EV_ABS, ABS_RZ, trigger(s.r2));
         const int hatX = (has(s.buttons, Button::DpadRight) ? 1 : 0) - (has(s.buttons, Button::DpadLeft) ? 1 : 0);
@@ -125,8 +126,9 @@ PadCreateResult createVirtualPad(OutputKind kind, FeedbackCallback /*onFeedback*
     for (int code : kKeyCodes) {
         ok = ok && ioctl(fd, UI_SET_KEYBIT, code) == 0;
     }
-    ok = ok && setupAbs(fd, ABS_X, -32768, 32767, 16, 0) && setupAbs(fd, ABS_Y, -32768, 32767, 16, 0) &&
-         setupAbs(fd, ABS_RX, -32768, 32767, 16, 0) && setupAbs(fd, ABS_RY, -32768, 32767, 16, 0) &&
+    // No fuzz: the kernel would otherwise drop small stick movements (not 1:1).
+    ok = ok && setupAbs(fd, ABS_X, -32768, 32767, 0, 0) && setupAbs(fd, ABS_Y, -32768, 32767, 0, 0) &&
+         setupAbs(fd, ABS_RX, -32768, 32767, 0, 0) && setupAbs(fd, ABS_RY, -32768, 32767, 0, 0) &&
          setupAbs(fd, ABS_Z, 0, 255, 0, 0) && setupAbs(fd, ABS_RZ, 0, 255, 0, 0) &&
          setupAbs(fd, ABS_HAT0X, -1, 1, 0, 0) && setupAbs(fd, ABS_HAT0Y, -1, 1, 0, 0);
 

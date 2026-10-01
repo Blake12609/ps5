@@ -21,8 +21,10 @@ struct CurvePoint {
 };
 
 struct StickSettings {
-    float deadzone = 0.05f;       // inner dead zone, fraction of full throw
-    float outerDeadzone = 0.02f;  // outer edge treated as full deflection
+    // Defaults are exactly 1:1: the stick reaches the game as the controller sends it, and the
+    // game's own dead zone handles resting noise (like playing on the controller directly).
+    float deadzone = 0.0f;       // inner dead zone, fraction of full throw
+    float outerDeadzone = 0.0f;  // outer edge treated as full deflection
     float antiDeadzone = 0.0f;    // minimum output once past the dead zone (cancels in-game dead zones)
     DeadzoneShape shape = DeadzoneShape::Radial;
     Curve curve = Curve::Default;
@@ -36,6 +38,9 @@ struct StickSettings {
 
     bool operator==(const StickSettings&) const = default;
 };
+
+// True when the settings leave the stick exactly as the controller sends it (1:1).
+bool isOneToOne(const StickSettings& s);
 
 // Hair trigger reset distance: default 1% (about 3 steps of the trigger sensor, so holding the
 // trigger steady never releases it by accident), minimum 0.5%.

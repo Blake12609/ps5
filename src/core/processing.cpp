@@ -84,6 +84,11 @@ float applyCurve(float t, Curve curve, float intensity, const std::vector<CurveP
     return t;
 }
 
+bool isOneToOne(const StickSettings& s) {
+    return s.deadzone <= 0.0f && s.outerDeadzone <= 0.0f && s.antiDeadzone <= 0.0f && s.curve == Curve::Default &&
+           s.rcFilter == 0.0f && !s.invertX && !s.invertY;
+}
+
 Vec2 processStick(float x, float y, const StickSettings& s) {
     if (s.invertX) x = -x;
     if (s.invertY) y = -y;
@@ -102,8 +107,11 @@ Vec2 processStick(float x, float y, const StickSettings& s) {
 
     const float r = std::hypot(x, y);
     if (r <= dz || r <= 0.0f) return {0.0f, 0.0f};
-    const float magnitude = shapeMagnitude(normalizeThrow(std::min(r, 1.0f), s), s);
-    const float scale = magnitude / r;
+    // Past full throw (the stick's corners reach slightly beyond a radius of 1) the direction and
+    // length are kept as they are, so diagonals are not pulled in: with no dead zone and the
+    // default curve the stick passes through exactly 1:1.
+    const float rr = std::min(r, 1.0f);
+    const float scale = shapeMagnitude(normalizeThrow(rr, s), s) / rr;
     return {clamp11(x * scale), clamp11(y * scale)};
 }
 

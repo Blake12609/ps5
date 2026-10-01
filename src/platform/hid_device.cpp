@@ -5,6 +5,8 @@
 
 #include <hidapi.h>
 
+#include "platform/hid_transport.hpp"
+
 namespace edgepad {
 namespace {
 
@@ -20,7 +22,34 @@ std::string hidError(hid_device* dev) {
     return msg.empty() ? std::string("unknown HID error") : msg;
 }
 
+class HidapiTransport final : public HidTransport {
+public:
+    explicit HidapiTransport(hid_device* dev) : dev_(dev) {}
+    ~HidapiTransport() override { hid_close(dev_); }
+    HidapiTransport(const HidapiTransport&) = delete;
+    HidapiTransport& operator=(const HidapiTransport&) = delete;
+
+    int read(uint8_t* buffer, size_t size, int timeoutMs) override {
+        return hid_read_timeout(dev_, buffer, size, timeoutMs);
+    }
+    bool write(const uint8_t* data, size_t size) override { return hid_write(dev_, data, size) >= 0; }
+    void getFeature(uint8_t* buffer, size_t size) override { hid_get_feature_report(dev_, buffer, size); }
+    std::string error() const override { return hidError(dev_); }
+
+private:
+    hid_device* dev_;
+};
+
 }  // namespace
+
+std::unique_ptr<HidTransport> openHidapiTransport(const std::string& path, std::string& error) {
+    hid_device* dev = hid_open_path(path.c_str());
+    if (dev == nullptr) {
+        error = "could not open controller: " + hidError(nullptr);
+        return nullptr;
+    }
+    return std::make_unique<HidapiTransport>(dev);
+}
 
 bool hidInit() { return hid_init() == 0; }
 void hidShutdown() { hid_exit(); }
@@ -38,15 +67,26 @@ std::vector<HidDeviceInfo> enumerateControllers() {
     return result;
 }
 
+DualSenseDevice::DualSenseDevice() = default;
 DualSenseDevice::~DualSenseDevice() { close(); }
 
-bool DualSenseDevice::open(const HidDeviceInfo& info, std::string& error) {
+bool DualSenseDevice::open(const HidDeviceInfo& info, std::string& error, bool exclusive, bool* inUse) {
     close();
-    dev_ = hid_open_path(info.path.c_str());
-    if (dev_ == nullptr) {
-        error = "could not open controller: " + hidError(nullptr);
-        return false;
+    if (inUse != nullptr) *inUse = false;
+#ifdef _WIN32
+    if (exclusive) {
+        bool busy = false;
+        dev_ = openExclusiveTransport(info.path, error, busy);
+        if (inUse != nullptr) *inUse = busy;
+    } else {
+        dev_ = openHidapiTransport(info.path, error);
     }
+#else
+    exclusive = false;  // Linux hides the controller with an input grab instead (see controller_hide)
+    dev_ = openHidapiTransport(info.path, error);
+#endif
+    if (!dev_) return false;
+    exclusive_ = exclusive;
     info_ = info;
     connection_ = dualsense::Connection::Unknown;
     sequence_ = 0;
@@ -57,25 +97,23 @@ bool DualSenseDevice::open(const HidDeviceInfo& info, std::string& error) {
     // Reading the calibration feature report switches Bluetooth controllers from the
     // reduced "simple" report to the full report (with Edge buttons, battery, ...).
     unsigned char feature[64] = {dualsense::kCalibrationFeatureReportId};
-    hid_get_feature_report(dev_, feature, sizeof(feature));
+    dev_->getFeature(feature, sizeof(feature));
     return true;
 }
 
 void DualSenseDevice::close() {
-    if (dev_ != nullptr) {
-        hid_close(dev_);
-        dev_ = nullptr;
-    }
+    dev_.reset();
+    exclusive_ = false;
     connection_ = dualsense::Connection::Unknown;
     lastSent_.reset();
 }
 
 DualSenseDevice::ReadResult DualSenseDevice::read(InputState& state, int timeoutMs) {
-    if (dev_ == nullptr) return ReadResult::Error;
+    if (!dev_) return ReadResult::Error;
     unsigned char buffer[128];
-    const int n = hid_read_timeout(dev_, buffer, sizeof(buffer), timeoutMs);
+    const int n = dev_->read(buffer, sizeof(buffer), timeoutMs);
     if (n < 0) {
-        error_ = hidError(dev_);
+        error_ = dev_->error();
         return ReadResult::Error;
     }
     if (n == 0) return ReadResult::Timeout;
@@ -91,20 +129,20 @@ DualSenseDevice::ReadResult DualSenseDevice::read(InputState& state, int timeout
 }
 
 bool DualSenseDevice::sendEffects(const dualsense::Effects& effects) {
-    if (dev_ == nullptr || connection_ == dualsense::Connection::Unknown) return false;
+    if (!dev_ || connection_ == dualsense::Connection::Unknown) return false;
     if (lastSent_ && *lastSent_ == effects) return true;
 
     auto write = [&](bool setup) {
         const auto report = dualsense::buildOutputReport(effects, connection_, sequence_, setup);
         sequence_ = static_cast<uint8_t>((sequence_ + 1) & 0x0F);
-        return hid_write(dev_, report.data(), report.size()) >= 0;
+        return dev_->write(report.data(), report.size());
     };
     if (needsLightbarSetup_) {
         if (!write(true)) return false;
         needsLightbarSetup_ = false;
     }
     if (!write(false)) {
-        error_ = hidError(dev_);
+        error_ = dev_->error();
         return false;
     }
     lastSent_ = effects;

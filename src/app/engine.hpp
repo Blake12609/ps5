@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -24,6 +25,8 @@ struct EngineStatus {
     std::string padMessage;  // why there is no virtual controller
     PadError padError = PadError::None;
     std::string keyboardMessage;  // why key bindings cannot be sent, empty when fine
+    bool controllerHidden = false;  // games cannot see the real controller
+    std::string hideMessage;        // how it is hidden / why it could not be, empty when not wanted
 
     float reportRate = 0.0f;  // controller reports per second
     bool gyroActive = false;  // gyro aiming is currently switched on
@@ -39,7 +42,8 @@ struct EngineStatus {
 class Engine {
 public:
     // `demo` feeds a simulated controller instead of real hardware (try settings without a pad).
-    explicit Engine(Config config, bool demo = false);
+    // `dataDir` holds state that must survive a crash (what was changed to hide the controller).
+    explicit Engine(Config config, bool demo = false, std::filesystem::path dataDir = {});
     ~Engine();
     Engine(const Engine&) = delete;
     Engine& operator=(const Engine&) = delete;
@@ -64,6 +68,7 @@ private:
     EngineStatus status_;
 
     const bool demo_;
+    const std::filesystem::path dataDir_;
     std::atomic<bool> stop_{false};
     std::atomic<bool> retryPad_{false};
     std::atomic<uint16_t> rumble_{0};

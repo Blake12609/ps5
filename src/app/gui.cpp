@@ -30,6 +30,7 @@ namespace {
 // ---------------------------------------------------------------------------
 // Theme
 // ---------------------------------------------------------------------------
+constexpr const char* kHidHideUrl = "https://github.com/nefarius/HidHide/releases/latest";
 constexpr ImU32 kAccent = IM_COL32(79, 140, 255, 255);
 constexpr ImU32 kAccentSoft = IM_COL32(79, 140, 255, 60);
 constexpr ImU32 kGood = IM_COL32(53, 196, 124, 255);
@@ -473,6 +474,12 @@ private:
             ImGui::TextUnformatted("No virtual controller");
             ImGui::SetItemTooltip("%s", status_.padMessage.c_str());
         }
+        if (status_.connected && status_.controllerHidden) {
+            ImGui::SameLine(0.0f, 28.0f);
+            statusDot(kGood);
+            ImGui::TextUnformatted("Hidden from games");
+            ImGui::SetItemTooltip("%s", status_.hideMessage.c_str());
+        }
         if (status_.connected && status_.reportRate > 0.0f) {
             ImGui::SameLine(0.0f, 28.0f);
             ImGui::TextDisabled("%.0f Hz", status_.reportRate);
@@ -658,6 +665,14 @@ private:
             ImGui::SameLine();
             if (ImGui::SmallButton("Retry")) engine_.retryVirtualPad();
         }
+        if (cfg_.settings.hideController && status_.connected && !status_.controllerHidden &&
+            !status_.hideMessage.empty()) {
+            banner(kWarn, status_.hideMessage);
+#if defined(_WIN32)
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Get HidHide")) openUrl(kHidHideUrl);
+#endif
+        }
         if (!notice_.empty()) {
             banner(kWarn, notice_);
             ImGui::SameLine();
@@ -678,7 +693,9 @@ private:
 
         ImGui::PushItemWidth(-ImGui::GetFontSize() * 9.5f);
         changed_ |= sliderPercent("Dead zone", &s.deadzone, 0, 40,
-                                  "Stick movement inside this circle is ignored. Raise it if the stick drifts.");
+                                  "Stick movement inside this circle is ignored. 0% = 1:1: the game's own dead "
+                                  "zone handles resting noise, like playing on the controller directly. Raise it "
+                                  "if the stick drifts in game (or use Calibrate sticks).");
         changed_ |= sliderPercent("Outer dead zone", &s.outerDeadzone, 0, 30,
                                   "The outer edge that already counts as full deflection.");
         changed_ |= sliderPercent("Anti-dead zone", &s.antiDeadzone, 0, 60,
@@ -706,10 +723,26 @@ private:
             "drifts. This keeps some games' aim assist engaged. Some online games treat this as aim-assist abuse "
             "- check the rules of the game you play.\n\nCtrl+click the slider to type an exact value.");
 
+        if (s.antiDeadzone > 0.0f && s.deadzone < 0.02f) {
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kWarn),
+                               "Anti-dead zone needs a small dead zone (3-5%%), or resting noise is boosted too.");
+        }
         changed_ |= enumCombo("Dead zone shape", s.shape, shapeLabel);
         changed_ |= ImGui::Checkbox("Invert X", &s.invertX);
         ImGui::SameLine();
         changed_ |= ImGui::Checkbox("Invert Y", &s.invertY);
+        ImGui::SameLine();
+        const bool oneToOne = isOneToOne(s);
+        ImGui::BeginDisabled(oneToOne);
+        if (ImGui::Button(oneToOne ? "Exact 1:1" : "Make 1:1")) {
+            StickSettings raw;
+            raw.customCurve = s.customCurve;  // keep the drawn curve for later
+            s = raw;
+            changed_ = true;
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("No dead zones, default curve, no RC filter: the game gets this stick exactly as the "
+                              "controller sends it, step for step.");
         if (s.curve == Curve::Custom) {
             ImGui::SameLine();
             if (ImGui::Button("Reset curve")) {
@@ -1194,6 +1227,30 @@ private:
         ImGui::EndDisabled();
         helpMarker("PlayStation (DualShock 4) output only. Games that colour the lightbar (health, team, police "
                    "lights...) control it like on a real PlayStation controller. Off = the profile colour.");
+        changed_ |= ImGui::Checkbox("Hide the real controller from games", &cfg_.settings.hideController);
+#if defined(_WIN32)
+        helpMarker("Games then only see EdgePad's virtual controller: no double input from the real one, which "
+                   "is what usually makes a remapped controller feel off.\n\nWith HidHide installed, EdgePad "
+                   "sets it up by itself: it allows EdgePad and hides the controller from every other program, "
+                   "and undoes it all when EdgePad closes. Without HidHide, EdgePad keeps the controller to itself "
+                   "instead - that only works if no other program (Steam, DS4Windows, a game) has it open yet.\n\n"
+                   "Programs that already had the controller open keep seeing it until it reconnects - start games "
+                   "after EdgePad, or unplug and replug the controller.");
+#else
+        helpMarker("Games then only see EdgePad's virtual controller: no double input from the real one. EdgePad "
+                   "grabs the controller's input devices, so nothing else receives their events, and lets go when it "
+                   "closes. Programs reading the controller directly through hidraw (Steam Input, some SDL games) "
+                   "are not affected - turn off their PlayStation controller support.");
+#endif
+        if (cfg_.settings.hideController && !status_.hideMessage.empty()) {
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(status_.controllerHidden ? kGood : kWarn), "%s",
+                               status_.hideMessage.c_str());
+        }
+#if defined(_WIN32)
+        if (cfg_.settings.hideController && !status_.controllerHidden && ImGui::Button("Get HidHide")) {
+            openUrl(kHidHideUrl);
+        }
+#endif
         ImGui::PopItemWidth();
         if (status_.padError == PadError::DriverMissing || status_.padError == PadError::Failed ||
             status_.padError == PadError::PermissionDenied) {
@@ -1249,8 +1306,9 @@ private:
         ImGui::PushTextWrapPos(0.0f);
         ImGui::SeparatorText("Getting started (Windows)");
         ImGui::BulletText("Install ViGEmBus once: it lets EdgePad create the virtual controller games see.");
-        ImGui::BulletText("Recommended: install HidHide and allow EdgePad in it, so games only see the virtual "
-                          "controller and never get double input from the real one.");
+        ImGui::BulletText("Recommended: install HidHide and turn on Settings -> Hide the real controller from "
+                          "games. EdgePad sets HidHide up by itself, so games only see the virtual controller and "
+                          "never get double input from the real one.");
         ImGui::BulletText("Plug in the DualSense / DualSense Edge over USB or pair it over Bluetooth. "
                           "EdgePad connects automatically.");
         ImGui::BulletText("If Steam is running, turn off Steam Input's PlayStation support for the virtual "
@@ -1261,6 +1319,8 @@ private:
         ImGui::BulletText("Fn is the Edge's Fn buttons, or Mute on a regular DualSense (change it in Settings).");
         ImGui::BulletText("The player LEDs show the active profile slot, the lightbar shows its colour.");
         ImGui::SeparatorText("What the settings do");
+        ImGui::BulletText("Sticks start exactly 1:1 (no dead zone, default curve): the game gets every step the "
+                          "controller sends. Make 1:1 resets a stick back to that.");
         ImGui::BulletText("Dead zone / anti-dead zone: ignore drift, then jump past the game's own dead zone.");
         ImGui::BulletText("Curves: Quick, Precise, Steady, Digital and Dynamic mirror the DualSense Edge presets; "
                           "Custom lets you drag your own curve.");
@@ -1280,7 +1340,7 @@ private:
         ImGui::SameLine();
         if (ImGui::Button("ViGEmBus")) openUrl("https://github.com/nefarius/ViGEmBus/releases/latest");
         ImGui::SameLine();
-        if (ImGui::Button("HidHide")) openUrl("https://github.com/nefarius/HidHide/releases/latest");
+        if (ImGui::Button("HidHide")) openUrl(kHidHideUrl);
     }
 
     Engine& engine_;

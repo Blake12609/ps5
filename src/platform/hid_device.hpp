@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -8,9 +9,9 @@
 #include "core/dualsense.hpp"
 #include "core/types.hpp"
 
-struct hid_device_;
-
 namespace edgepad {
+
+class HidTransport;
 
 struct HidDeviceInfo {
     std::string path;
@@ -23,19 +24,23 @@ void hidShutdown();
 // Lists connected DualSense and DualSense Edge controllers (USB and Bluetooth).
 std::vector<HidDeviceInfo> enumerateControllers();
 
-// A DualSense / DualSense Edge opened through hidapi.
+// A DualSense / DualSense Edge controller.
 class DualSenseDevice {
 public:
     enum class ReadResult { Data, Timeout, Error };
 
-    DualSenseDevice() = default;
+    DualSenseDevice();
     ~DualSenseDevice();
     DualSenseDevice(const DualSenseDevice&) = delete;
     DualSenseDevice& operator=(const DualSenseDevice&) = delete;
 
-    bool open(const HidDeviceInfo& info, std::string& error);
+    // `exclusive` (Windows): open it so no other program can, which hides it from games. Fails with
+    // `inUse` set when another program already has it open.
+    bool open(const HidDeviceInfo& info, std::string& error, bool exclusive = false, bool* inUse = nullptr);
     void close();
     bool isOpen() const { return dev_ != nullptr; }
+    bool isExclusive() const { return exclusive_; }
+    const std::string& path() const { return info_.path; }
 
     ReadResult read(InputState& state, int timeoutMs);
     // Sends lightbar / LEDs / trigger effects / rumble. Skips the write when nothing changed.
@@ -47,7 +52,8 @@ public:
     const std::string& lastError() const { return error_; }
 
 private:
-    hid_device_* dev_ = nullptr;
+    std::unique_ptr<HidTransport> dev_;
+    bool exclusive_ = false;
     HidDeviceInfo info_;
     dualsense::Connection connection_ = dualsense::Connection::Unknown;
     uint8_t sequence_ = 0;

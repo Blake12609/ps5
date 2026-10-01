@@ -200,7 +200,7 @@ int main(int argc, char** argv) {
     if (!warning.empty()) std::fprintf(stderr, "warning: %s\n", warning.c_str());
     store.save(config);  // writes defaults on first start so the file is easy to find and edit
 
-    Engine engine(config, options.demo);
+    Engine engine(config, options.demo, dataDir);
     engine.start();
     Updater updater;
     const bool autoUpdate = config.settings.autoUpdate && !options.noUpdate && Updater::canSelfUpdate();

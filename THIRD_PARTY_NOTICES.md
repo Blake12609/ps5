@@ -12,3 +12,5 @@ EdgePad binaries statically include the following libraries. Each is used under 
 | doctest (tests only, not shipped) | MIT | https://github.com/doctest/doctest |
 
 The ViGEmBus and HidHide drivers are separate downloads from their authors and are not bundled.
+EdgePad talks to an installed HidHide through its documented control interface (the I/O control codes
+from HidHide's `HidHideIoctlContract.h`, MIT, https://github.com/nefarius/HidHide).

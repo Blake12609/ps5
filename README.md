@@ -10,7 +10,7 @@ as a single portable executable, and updates itself from this repository's relea
 
 | Area | What you get |
 | --- | --- |
-| **Sticks** | Inner / outer dead zone, **anti-dead zone**, radial or axial dead zone, invert X/Y, swap sticks, one-click **drift calibration** |
+| **Sticks** | **Exactly 1:1 by default**: every stick step reaches the game as the controller sent it, diagonals included. Inner / outer dead zone, **anti-dead zone**, radial or axial dead zone, invert X/Y, swap sticks, one-click **drift calibration** |
 | **Response curves** | DualSense Edge presets (Default, Quick, Precise, Steady, Digital, Dynamic) with adjustable strength, plus a **Custom** curve you drag with the mouse |
 | **RC filter** | GameSir style, active only while you move the stick. Positive = *stabilizer* (RC low-pass that removes micro-jitter). Negative = *jitter* that wobbles the aim direction while keeping your aim speed exactly the same |
 | **Triggers** | Dead zone, **trigger stop** (short trigger range), anti-dead zone, **rapid hair trigger** (full press the moment you pull, releases as soon as you ease off, fires again without letting go), **turbo** (1–100 ms between presses), adaptive-trigger **resistance wall** that makes the stop something you can feel |
@@ -21,6 +21,7 @@ as a single portable executable, and updates itself from this repository's relea
 | **Profiles** | Up to 16 profiles. **Fn + Cross/Circle/Square/Triangle** switches profile from the controller, like the Edge. Lightbar colour and player LEDs show the active profile |
 | **Controller** | DualSense and DualSense Edge over USB or Bluetooth, battery level, game rumble forwarded back to the controller |
 | **Output** | Virtual **Xbox 360** or **PlayStation (DualShock 4)** controller via ViGEmBus on Windows, with gyro, accelerometer and touchpad passed through in PlayStation mode. uinput on Linux |
+| **Hide controller** | **Hide the real controller from games** so they only see the virtual one: no double input. Uses HidHide when it's installed (EdgePad sets it up and undoes it by itself), otherwise exclusive access. On Linux it grabs the controller's input devices |
 | **Portable** | One exe. Settings live in `EdgePad-data/` next to it, so the folder can sit on a USB stick |
 | **Auto update** | Checks GitHub Releases on start, verifies the SHA-256 checksum and swaps in the new exe |
 
@@ -31,15 +32,17 @@ A regular DualSense works too. It has no back buttons, so the **Mute** button ac
 - Controller input runs on its own thread, driven by the controller's HID reports (no polling sleeps).
 - A report is turned into virtual controller output in microseconds.
 - The virtual controller is only updated when the output actually changes.
+- On Windows the input thread runs at high priority, so a busy game can't delay a controller report.
 - The UI renders at full rate only while focused; in the background it drops to about 15 fps, and it stops rendering while minimized.
 
 ## Getting started (Windows)
 
 1. Download `EdgePad-windows-x64.exe` from the [latest release](../../releases/latest) and put it in any folder.
 2. Install the [ViGEmBus driver](https://github.com/nefarius/ViGEmBus/releases/latest) once. It lets EdgePad create the virtual controller that games see.
-3. Recommended: install [HidHide](https://github.com/nefarius/HidHide/releases/latest), add `EdgePad-windows-x64.exe`
-   to its allowed applications and hide the DualSense. Games then only see the remapped virtual controller, so you never get double input.
+3. Recommended: install [HidHide](https://github.com/nefarius/HidHide/releases/latest).
 4. Start EdgePad and connect the controller over USB or Bluetooth. It is picked up automatically.
+5. Turn on **Settings → Hide the real controller from games**. Games then only see the virtual controller, so
+   they never get double input from the real one (see [Hiding the real controller](#hiding-the-real-controller)).
 
 If Steam is running, disable Steam Input's PlayStation support for the virtual controller so you only have one remapping layer.
 
@@ -47,6 +50,36 @@ For PlayStation button prompts, set **Settings → Virtual controller → PlaySt
 emulate a PS5 controller, so games see a PS4 controller. EdgePad passes the DualSense's gyro, accelerometer and
 touchpad through to it, so motion aiming works in games that support it. You can also let games set the
 lightbar colour, like on a real PlayStation controller.
+
+## Hiding the real controller
+
+If a game sees both the real DualSense and EdgePad's virtual controller, it gets every input twice: once
+remapped and once raw. Aim then fights itself, and the controller "feels off". **Settings → Hide the real
+controller from games** fixes that:
+
+- **Windows with HidHide:** EdgePad adds itself to HidHide's allowed applications, hides the controller from
+  every other program and switches HidHide on. With HidHide 2 the hiding belongs to EdgePad's process, so
+  the driver ends it the moment EdgePad closes, even after a crash. With older versions EdgePad removes its
+  entry when it closes, or on its next start. You don't need to touch HidHide's own settings.
+- **Windows without HidHide:** EdgePad opens the controller exclusively, so no other program can open it
+  while EdgePad has it. That only works if nothing else (Steam, DS4Windows, a game) already has it open. If
+  something does, EdgePad says so; close it and reconnect the controller, or install HidHide.
+- **Linux:** EdgePad grabs the controller's input devices, so games and the desktop get none of their
+  events. Programs that read the controller through hidraw (Steam Input, some SDL games) aren't affected;
+  turn off their PlayStation controller support. Install `70-edgepad.rules` so EdgePad can grab all of them.
+
+Programs that already had the controller open keep it until it reconnects. Start games after EdgePad, or
+unplug and replug the controller.
+
+### Why not a custom driver instead of ViGEmBus?
+
+A virtual controller needs a kernel driver, and Windows 10/11 only load drivers that Microsoft has
+signed. Getting that signature takes an EV code-signing certificate and Microsoft's attestation
+process. The other route, test-signing mode, is blocked by the anti-cheats of most online games.
+ViGEmBus is such a signed driver and adds well under a millisecond. When EdgePad leaves a stick
+untouched, the game gets it exactly as the controller sent it, step for step. What usually makes it
+feel different is the real controller being visible next to the virtual one (above), or extra
+processing (dead zones, curves) on top of the game's own.
 
 ## Getting started (Linux)
 
@@ -151,7 +184,8 @@ Try the UI without a controller with `EdgePad --demo`, which simulates one.
 ```
 src/core/       platform independent: stick/trigger processing, RC filter, remapping pipeline,
                 DualSense HID protocol, config JSON, versions, SHA-256   (unit tested)
-src/platform/   hidapi device, ViGEmBus / uinput virtual controller, WinHTTP / curl, portable paths, self-update
+src/platform/   hidapi / exclusive HID device, controller hiding (HidHide, input grab), ViGEmBus / uinput
+                virtual controller, WinHTTP / curl, portable paths, self-update
 src/app/        engine thread, updater, config store, Dear ImGui interface, main
 tests/          doctest unit tests
 ```
