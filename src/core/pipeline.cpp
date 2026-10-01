@@ -121,6 +121,7 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     out.motion = in.motion;
     out.battery = in.battery;
     out.charging = in.charging;
+    out.raw = in.raw;
     if (!cfg.settings.enabled) {
         leftFilter_.reset();
         rightFilter_.reset();

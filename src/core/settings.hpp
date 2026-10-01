@@ -13,7 +13,7 @@
 
 namespace edgepad {
 
-enum class OutputKind : uint8_t { Xbox360, DualShock4, None, Count };
+enum class OutputKind : uint8_t { Xbox360, DualShock4, DualSense, None, Count };
 
 // Which physical button acts as "Fn" for profile switching (Fn + face button).
 enum class FnMode : uint8_t {

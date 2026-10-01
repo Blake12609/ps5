@@ -23,6 +23,7 @@ struct EngineStatus {
 
     std::string padName;     // active virtual controller, empty when none
     std::string padMessage;  // why there is no virtual controller
+    std::string padWarning;  // the virtual controller exists but does not fully work yet
     PadError padError = PadError::None;
     std::string keyboardMessage;  // why key bindings cannot be sent, empty when fine
     bool controllerHidden = false;  // games cannot see the real controller

@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "core/pipeline.hpp"
+#include "core/virtual_dualsense.hpp"
 #include "core/virtual_reports.hpp"
 #include "platform/controller_hide.hpp"
 #include "platform/hid_device.hpp"
@@ -103,6 +104,11 @@ void Engine::run() {
     // reading the controller - with game rumble changing every frame it otherwise could.
     constexpr auto kEffectsInterval = std::chrono::milliseconds(10);
     Clock::time_point nextEffectsWrite{};
+    // Virtual DualSense: games drive parts of the real controller through it (dualsense::kPart*).
+    uint8_t gameParts = 0;
+    bool featuresSent = false;  // the virtual DualSense has the controller's feature reports
+    int lastProfile = -1;
+    Clock::time_point nextPadStatus{};
 
     const Clock::time_point demoStart = Clock::now();
     Clock::time_point lastReport = Clock::now();
@@ -208,6 +214,7 @@ void Engine::run() {
                 for (const auto& info : enumerateControllers()) {
                     if (openController(info)) {
                         pipeline.reset();
+                        featuresSent = false;
                         lastReport = Clock::now();
                         lastAttemptKind = OutputKind::Count;
                         std::lock_guard lock(mutex_);
@@ -246,7 +253,10 @@ void Engine::run() {
             if (created.pad) {
                 pad = std::move(created.pad);
                 padKind = wanted;
+                gameParts = 0;
+                featuresSent = false;
                 status_.padName = pad->name();
+                status_.padWarning = pad->warning();
                 status_.padMessage.clear();
                 status_.padError = PadError::None;
             } else {
@@ -261,6 +271,21 @@ void Engine::run() {
             status_.padName.clear();
             status_.padMessage = "Monitor only: no virtual controller";
             status_.padError = PadError::None;
+        }
+        if (pad && !featuresSent) {
+            // A virtual DualSense answers with the real controller's calibration, MAC and firmware info.
+            pad->setFeatureReports(demo_ ? std::map<uint8_t, std::vector<uint8_t>>{} : device.featureReports());
+            featuresSent = true;
+        }
+        if (pad && now >= nextPadStatus) {  // e.g. the virtual DualSense finished connecting
+            nextPadStatus = now + std::chrono::milliseconds(250);
+            std::string name = pad->name(), warning = pad->warning();
+            std::lock_guard lock(mutex_);
+            status_.padName = std::move(name);
+            status_.padWarning = std::move(warning);
+        } else if (!pad) {
+            std::lock_guard lock(mutex_);
+            status_.padWarning.clear();
         }
 
         // Controller input.
@@ -339,9 +364,31 @@ void Engine::run() {
             gameLightbar = std::array<uint8_t, 3>{static_cast<uint8_t>(lb >> 16), static_cast<uint8_t>(lb >> 8),
                                                   static_cast<uint8_t>(lb)};
         }
-        const dualsense::Effects effects =
+        dualsense::Effects effects =
             effectsForConfig(cfg, static_cast<uint8_t>(rumble >> 8), static_cast<uint8_t>(rumble & 0xFF), gameLightbar);
-        if (device.isOpen() && device.effectsChanged(effects)) {
+        if (pad && padKind == OutputKind::DualSense) {
+            // Games drive the real controller through the virtual DualSense, like on a PS5:
+            // adaptive triggers, rumble, lightbar. A profile's trigger resistance and (unless games
+            // may set it) the profile lightbar stay EdgePad's.
+            const Profile& profile = cfg.active();
+            const bool profileTriggers = profile.l2.resistance != TriggerResistance::Off ||
+                                         profile.r2.resistance != TriggerResistance::Off;
+            if (cfg.settings.activeProfile != lastProfile) {
+                lastProfile = cfg.settings.activeProfile;
+                gameParts &= static_cast<uint8_t>(~dualsense::kPartTriggers);  // clear a previous profile's wall
+            }
+            const virtual_dualsense::OutputFilter filter{cfg.settings.rumble, cfg.settings.gameLightbar, !profileTriggers};
+            for (const auto& report : pad->takeOutputReports()) {
+                const auto common = virtual_dualsense::filterGameOutput(report.data(), report.size(), filter);
+                if (!common) continue;
+                gameParts |= virtual_dualsense::partsChanged(*common);
+                if (device.isOpen()) device.sendOutput(common->data());
+            }
+            effects.parts = 0;
+            if (!(cfg.settings.gameLightbar && (gameParts & dualsense::kPartLights))) effects.parts |= dualsense::kPartLights;
+            if (profileTriggers || !(gameParts & dualsense::kPartTriggers)) effects.parts |= dualsense::kPartTriggers;
+        }
+        if (device.isOpen() && effects.parts != 0 && device.effectsChanged(effects)) {
             if (const Clock::time_point t = Clock::now(); t >= nextEffectsWrite) {
                 device.sendEffects(effects);
                 nextEffectsWrite = t + kEffectsInterval;

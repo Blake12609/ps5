@@ -228,6 +228,7 @@ std::string_view outputKindId(OutputKind k) {
     switch (k) {
         case OutputKind::Xbox360: return "xbox360";
         case OutputKind::DualShock4: return "ds4";
+        case OutputKind::DualSense: return "dualsense";
         case OutputKind::None: return "none";
         case OutputKind::Count: break;
     }
@@ -236,12 +237,13 @@ std::string_view outputKindId(OutputKind k) {
 
 std::string_view outputKindLabel(OutputKind k) {
     switch (k) {
-        case OutputKind::Xbox360: return "Xbox 360 (best game support)";
-        case OutputKind::DualShock4: return "PlayStation (DualShock 4)";
+        case OutputKind::Xbox360: return "Xbox 360";
+        case OutputKind::DualShock4: return "PlayStation 4 (DualShock 4)";
+        case OutputKind::DualSense: return "PlayStation 5 (DualSense)";
         case OutputKind::None: return "None (monitor only)";
         case OutputKind::Count: break;
     }
-    return "Xbox 360 (best game support)";
+    return "Xbox 360";
 }
 
 std::string_view fnModeId(FnMode m) {

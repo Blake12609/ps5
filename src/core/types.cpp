@@ -67,7 +67,7 @@ bool isRemapSource(Button b) { return b != Button::L2 && b != Button::R2 && b !=
 
 bool isRemapTarget(Button b) {
     switch (b) {
-        case Button::Mute:
+        // Mute is a target: a virtual DualSense has one (Xbox / DualShock 4 output have no Mute).
         case Button::PaddleLeft:
         case Button::PaddleRight:
         case Button::FnLeft:

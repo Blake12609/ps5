@@ -136,6 +136,15 @@ InputState parseFullBody(const uint8_t* body, size_t available) {
     return s;
 }
 
+// Keeps the report body for a virtual DualSense (only complete full reports).
+InputState withRaw(InputState s, const uint8_t* body, size_t available) {
+    if (available >= s.raw.body.size()) {
+        std::copy(body, body + s.raw.body.size(), s.raw.body.begin());
+        s.raw.valid = true;
+    }
+    return s;
+}
+
 }  // namespace
 
 bool isSupportedProduct(uint16_t productId) {
@@ -155,11 +164,11 @@ std::optional<ParsedReport> parseInputReport(const uint8_t* data, size_t length)
     // USB: report 0x01, 64 bytes, body right after the id. Over Bluetooth, Windows pads the
     // short 0x01 report to the 78 byte maximum, so a longer 0x01 report is the BT simple one.
     if (id == kUsbInputReportId && length >= 1 + kFullBodySize && length <= kUsbInputReportSize) {
-        return ParsedReport{parseFullBody(data + 1, length - 1), Connection::Usb};
+        return ParsedReport{withRaw(parseFullBody(data + 1, length - 1), data + 1, length - 1), Connection::Usb};
     }
     // Bluetooth full report: 0x31, 78 bytes, one extra header byte.
     if (id == kBtInputReportId && length >= 2 + kButtons2 + 1) {
-        return ParsedReport{parseFullBody(data + 2, length - 2), Connection::Bluetooth};
+        return ParsedReport{withRaw(parseFullBody(data + 2, length - 2), data + 2, length - 2), Connection::Bluetooth};
     }
     // Bluetooth "simple" report 0x01 (before the full report mode is enabled).
     if (id == kUsbInputReportId && length >= 10) {
@@ -213,6 +222,34 @@ TriggerEffect triggerEffectFor(const TriggerSettings& settings) {
 
 std::vector<uint8_t> buildOutputReport(const Effects& fx, Connection connection, uint8_t sequence,
                                        bool lightbarSetup) {
+    std::array<uint8_t, kOutCommonSize> c{};
+    if (lightbarSetup) {
+        c[kOutFlags2] = kFlag2LightbarSetup;
+        c[kOutLightbarSetup] = kLightbarSetupLightOut;
+    } else {
+        if (fx.parts & kPartRumble) {
+            c[kOutFlags0] |= kFlag0CompatibleVibration | kFlag0HapticsSelect;
+            c[kOutMotorRight] = fx.rumbleRight;
+            c[kOutMotorLeft] = fx.rumbleLeft;
+        }
+        if (fx.parts & kPartTriggers) {
+            c[kOutFlags0] |= kFlag0RightTrigger | kFlag0LeftTrigger;
+            std::copy(fx.rightTrigger.begin(), fx.rightTrigger.end(), c.begin() + kOutRightTrigger);
+            std::copy(fx.leftTrigger.begin(), fx.leftTrigger.end(), c.begin() + kOutLeftTrigger);
+        }
+        if (fx.parts & kPartLights) {
+            c[kOutFlags1] = kFlag1LightbarControl | kFlag1PlayerIndicator;
+            c[kOutPlayerLeds] = fx.playerLeds;
+            c[kOutLightbarRed + 0] = fx.lightbar[0];
+            c[kOutLightbarRed + 1] = fx.lightbar[1];
+            c[kOutLightbarRed + 2] = fx.lightbar[2];
+        }
+    }
+    static_assert(kOutLightbarRed + 3 == kOutCommonSize && kOutCommonSize == kOutputCommonSize);
+    return wrapOutputReport(c.data(), connection, sequence);
+}
+
+std::vector<uint8_t> wrapOutputReport(const uint8_t* common, Connection connection, uint8_t sequence) {
     std::vector<uint8_t> report;
     size_t offset = 0;
     if (connection == Connection::Bluetooth) {
@@ -226,24 +263,7 @@ std::vector<uint8_t> buildOutputReport(const Effects& fx, Connection connection,
         report[0] = kUsbOutputReportId;
         offset = 1;
     }
-    uint8_t* c = report.data() + offset;
-
-    if (lightbarSetup) {
-        c[kOutFlags2] = kFlag2LightbarSetup;
-        c[kOutLightbarSetup] = kLightbarSetupLightOut;
-    } else {
-        c[kOutFlags0] = kFlag0CompatibleVibration | kFlag0HapticsSelect | kFlag0RightTrigger | kFlag0LeftTrigger;
-        c[kOutFlags1] = kFlag1LightbarControl | kFlag1PlayerIndicator;
-        c[kOutMotorRight] = fx.rumbleRight;
-        c[kOutMotorLeft] = fx.rumbleLeft;
-        std::copy(fx.rightTrigger.begin(), fx.rightTrigger.end(), c + kOutRightTrigger);
-        std::copy(fx.leftTrigger.begin(), fx.leftTrigger.end(), c + kOutLeftTrigger);
-        c[kOutPlayerLeds] = fx.playerLeds;
-        c[kOutLightbarRed + 0] = fx.lightbar[0];
-        c[kOutLightbarRed + 1] = fx.lightbar[1];
-        c[kOutLightbarRed + 2] = fx.lightbar[2];
-    }
-    static_assert(kOutLightbarRed + 3 == kOutCommonSize);
+    std::copy(common, common + kOutCommonSize, report.begin() + static_cast<std::ptrdiff_t>(offset));
 
     if (connection == Connection::Bluetooth) {
         const uint8_t seed = kBtCrcSeedOutput;

@@ -85,6 +85,16 @@ struct MotionState {
     bool operator==(const MotionState&) const = default;
 };
 
+// The controller's own input report body (the 63 bytes after the USB report id; Bluetooth full
+// reports carry the same layout). Kept so a virtual DualSense can pass on every byte EdgePad does
+// not change, unknown ones included.
+struct RawReport {
+    std::array<uint8_t, 63> body{};
+    bool valid = false;
+
+    bool operator==(const RawReport&) const = default;
+};
+
 // Raw controller state. Sticks: -1..1 with +x right and +y up. Triggers: 0..1.
 struct InputState {
     float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;
@@ -93,6 +103,7 @@ struct InputState {
     MotionState motion;
     int battery = -1;  // percent, -1 when unknown
     bool charging = false;
+    RawReport raw;
 };
 
 // State sent to the virtual controller.
@@ -104,6 +115,7 @@ struct OutputState {
     KeyMask keys;  // keyboard keys / mouse buttons to hold down
     int battery = -1;
     bool charging = false;
+    RawReport raw;  // the controller's report this state was made from
 
     bool operator==(const OutputState&) const = default;
 };

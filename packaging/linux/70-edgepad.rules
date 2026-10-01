@@ -16,3 +16,6 @@ KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", TAG+="uaccess", OPTIONS+="stat
 # games" can grab them all
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/vendor}=="054c", ATTRS{id/product}=="0ce6", MODE="0660", TAG+="uaccess"
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/vendor}=="054c", ATTRS{id/product}=="0df2", MODE="0660", TAG+="uaccess"
+
+# Virtual PS5 controller (Settings -> Virtual controller -> PlayStation 5)
+KERNEL=="uhid", SUBSYSTEM=="misc", MODE="0660", TAG+="uaccess", OPTIONS+="static_node=uhid"

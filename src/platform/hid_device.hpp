@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -46,6 +47,12 @@ public:
     ReadResult read(InputState& state, int timeoutMs);
     // Sends lightbar / LEDs / trigger effects / rumble. Skips the write when nothing changed.
     bool sendEffects(const dualsense::Effects& effects);
+    // Writes the 47 common bytes of an output report (e.g. one a game sent to the virtual
+    // DualSense), wrapped for the connection.
+    bool sendOutput(const uint8_t* common);
+    // Feature reports read when the controller was opened (report id first): calibration (0x05),
+    // pairing info (0x09), firmware info (0x20), hardware info (0x22).
+    const std::map<uint8_t, std::vector<uint8_t>>& featureReports() const { return features_; }
     // True when `effects` differ from what the controller last got (a write is due).
     bool effectsChanged(const dualsense::Effects& effects) const { return !lastSent_ || *lastSent_ != effects; }
 
@@ -65,6 +72,7 @@ private:
     bool needsLightbarSetup_ = true;
     std::optional<dualsense::Effects> lastSent_;
     virtual_reports::MotionCalibration motionCalibration_ = virtual_reports::nominalCalibration();
+    std::map<uint8_t, std::vector<uint8_t>> features_;
     std::string error_;
 };
 

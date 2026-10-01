@@ -126,9 +126,13 @@ private:
 
 }  // namespace
 
-const char* virtualPadDriverUrl() { return "https://github.com/nefarius/ViGEmBus/releases/latest"; }
+const char* virtualPadDriverUrl(OutputKind kind) {
+    return kind == OutputKind::DualSense ? "https://github.com/vadimgrn/usbip-win2/releases/latest"
+                                         : "https://github.com/nefarius/ViGEmBus/releases/latest";
+}
 
 PadCreateResult createVirtualPad(OutputKind kind, FeedbackCallback onFeedback) {
+    if (kind == OutputKind::DualSense) return createVirtualDualSense();  // usbip-win2, no ViGEmBus
     PadCreateResult result;
     if (kind == OutputKind::None) {
         result.error = PadError::Unsupported;

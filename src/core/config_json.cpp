@@ -382,6 +382,14 @@ Config configFromJson(const std::string& text, std::string* warning) {
             }
         }
     }
+    if (version < 4) {
+        // Before version 4 Mute could not be sent to a game and was saved as "nothing". With the
+        // virtual DualSense it can: the old default becomes Mute -> Mute.
+        for (auto& p : cfg.profiles) {
+            Binding& mute = p.buttons[static_cast<size_t>(index(Button::Mute))];
+            if (mute.kind == Binding::Kind::Disabled) mute = Binding::toButton(Button::Mute);
+        }
+    }
     cfg.normalize();
     return cfg;
 }

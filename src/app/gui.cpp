@@ -648,14 +648,25 @@ private:
                 }
             }
         }
-        if (!status_.padName.empty() || cfg_.settings.output == OutputKind::None) {
+        [[maybe_unused]] const bool ps5Output = cfg_.settings.output == OutputKind::DualSense;
+        if (!status_.padName.empty() && !status_.padWarning.empty()) {
+            banner(kWarn, status_.padWarning);
+#if defined(_WIN32)
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Get usbip-win2")) openUrl(virtualPadDriverUrl(OutputKind::DualSense));
+#endif
+        } else if (!status_.padName.empty() || cfg_.settings.output == OutputKind::None) {
             // nothing to warn about
         } else if (status_.padError != PadError::None && !status_.padMessage.empty()) {
 #if defined(_WIN32)
-            if (status_.padError == PadError::DriverMissing) {
+            if (status_.padError == PadError::DriverMissing && ps5Output) {
+                banner(kWarn, "Install usbip-win2 so EdgePad can create the virtual PS5 controller (no ViGEmBus needed).");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Get usbip-win2")) openUrl(virtualPadDriverUrl(OutputKind::DualSense));
+            } else if (status_.padError == PadError::DriverMissing) {
                 banner(kWarn, "Install the ViGEmBus driver so games can see the remapped controller.");
                 ImGui::SameLine();
-                if (ImGui::SmallButton("Get ViGEmBus")) openUrl(virtualPadDriverUrl());
+                if (ImGui::SmallButton("Get ViGEmBus")) openUrl(virtualPadDriverUrl(cfg_.settings.output));
             } else {
                 banner(kWarn, status_.padMessage);
             }
@@ -1214,19 +1225,22 @@ private:
         ImGui::PushItemWidth(ImGui::GetFontSize() * 18.0f);
         ImGui::SeparatorText("Controller");
         changed_ |= enumCombo("Virtual controller", cfg_.settings.output, outputKindLabel);
-        helpMarker("What games see. Xbox 360 works with almost every PC game. PlayStation (DualShock 4) shows "
-                   "PlayStation button prompts and also passes the gyro, accelerometer and touchpad through, "
-                   "so motion aiming works in games that support it. ViGEmBus cannot emulate a PS5 "
-                   "controller, so the DualShock 4 is the PlayStation option.");
+        helpMarker("What games see.\n\n"
+                   "PlayStation 5 (DualSense): a genuine wired PS5 controller, built from your controller's own "
+                   "reports - PS5 button prompts, gyro, touchpad, and games' adaptive triggers, rumble and "
+                   "lightbar reach your real controller. No ViGEmBus: on Windows it needs usbip-win2 (a "
+                   "Microsoft-signed driver; Windows then handles the virtual controller with its own USB "
+                   "drivers, like a real one plugged in). On Linux it uses the kernel's UHID.\n\n"
+                   "Xbox 360 / PlayStation 4 (DualShock 4) use ViGEmBus.");
         changed_ |= enumCombo("Fn button", cfg_.settings.fnMode, fnModeLabel);
         helpMarker("Hold Fn and press Cross / Circle / Square / Triangle to switch profiles, or Options to toggle "
                    "remapping. A regular DualSense can use the Mute button as Fn.");
         changed_ |= ImGui::Checkbox("Forward game rumble to the controller", &cfg_.settings.rumble);
-        ImGui::BeginDisabled(cfg_.settings.output != OutputKind::DualShock4);
+        ImGui::BeginDisabled(cfg_.settings.output != OutputKind::DualShock4 && cfg_.settings.output != OutputKind::DualSense);
         changed_ |= ImGui::Checkbox("Let games set the lightbar colour", &cfg_.settings.gameLightbar);
         ImGui::EndDisabled();
-        helpMarker("PlayStation (DualShock 4) output only. Games that colour the lightbar (health, team, police "
-                   "lights...) control it like on a real PlayStation controller. Off = the profile colour.");
+        helpMarker("PlayStation output only. Games that colour the lightbar (health, team, police lights...) or "
+                   "set the player LEDs control them like on a real PlayStation controller. Off = the profile colour.");
         changed_ |= ImGui::Checkbox("Hide the real controller from games", &cfg_.settings.hideController);
 #if defined(_WIN32)
         helpMarker("Games then only see EdgePad's virtual controller: no double input from the real one, which "
@@ -1256,7 +1270,9 @@ private:
             status_.padError == PadError::PermissionDenied) {
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kWarn), "%s", status_.padMessage.c_str());
 #if defined(_WIN32)
-            if (ImGui::Button("Get the ViGEmBus driver")) openUrl(virtualPadDriverUrl());
+            if (ImGui::Button(cfg_.settings.output == OutputKind::DualSense ? "Get usbip-win2" : "Get the ViGEmBus driver")) {
+                openUrl(virtualPadDriverUrl(cfg_.settings.output));
+            }
             ImGui::SameLine();
 #endif
             if (ImGui::Button("Retry now")) engine_.retryVirtualPad();
@@ -1305,7 +1321,8 @@ private:
     void drawHelpTab() {
         ImGui::PushTextWrapPos(0.0f);
         ImGui::SeparatorText("Getting started (Windows)");
-        ImGui::BulletText("Install ViGEmBus once: it lets EdgePad create the virtual controller games see.");
+        ImGui::BulletText("For a virtual PS5 controller (Settings -> Virtual controller -> PlayStation 5): install "
+                          "usbip-win2 once. For Xbox 360 / PS4 output: install ViGEmBus once.");
         ImGui::BulletText("Recommended: install HidHide and turn on Settings -> Hide the real controller from "
                           "games. EdgePad sets HidHide up by itself, so games only see the virtual controller and "
                           "never get double input from the real one.");
@@ -1326,7 +1343,8 @@ private:
                           "Custom lets you drag your own curve.");
         ImGui::BulletText("RC filter: positive values smooth the stick (stabilizer), negative values add jitter - "
                           "only while you move the stick.");
-        ImGui::BulletText("PlayStation (DualShock 4) output passes gyro, accelerometer and touchpad to games.");
+        ImGui::BulletText("PlayStation 5 (DualSense) output gives games a genuine PS5 controller: adaptive triggers, "
+                          "rumble and lightbar from games reach your controller. PS4 output passes gyro and touchpad too.");
         ImGui::BulletText("Trigger stop + resistance wall: shorter trigger pulls like the Edge's hardware stops.");
         ImGui::BulletText("Gyro: turn / tilt the controller to fine-aim, e.g. only while L2 is held. Calibrate it once.");
         ImGui::BulletText("Buttons can send keyboard keys and mouse buttons, and each can be a toggle or turbo.");
@@ -1337,6 +1355,8 @@ private:
         ImGui::Spacing();
         const std::string repoUrl = std::string("https://github.com/") + build::kRepository;
         if (ImGui::Button("Project page")) openUrl(repoUrl);
+        ImGui::SameLine();
+        if (ImGui::Button("usbip-win2")) openUrl(virtualPadDriverUrl(OutputKind::DualSense));
         ImGui::SameLine();
         if (ImGui::Button("ViGEmBus")) openUrl("https://github.com/nefarius/ViGEmBus/releases/latest");
         ImGui::SameLine();

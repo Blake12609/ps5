@@ -20,7 +20,7 @@ as a single portable executable, and updates itself from this repository's relea
 | **Touchpad zones** | Split the touchpad into 2 or 4 extra buttons, fired on click or on touch, which is great on a regular DualSense |
 | **Profiles** | Up to 16 profiles. **Fn + Cross/Circle/Square/Triangle** switches profile from the controller, like the Edge. Lightbar colour and player LEDs show the active profile |
 | **Controller** | DualSense and DualSense Edge over USB or Bluetooth, battery level, game rumble forwarded back to the controller |
-| **Output** | Virtual **Xbox 360** or **PlayStation (DualShock 4)** controller via ViGEmBus on Windows, with gyro, accelerometer and touchpad passed through in PlayStation mode. uinput on Linux |
+| **Output** | A virtual **PS5 controller (DualSense)** with no ViGEmBus. Games get a genuine wired DualSense whose adaptive triggers, rumble and lightbar reach your real controller. Or a virtual **Xbox 360** / **PlayStation 4 (DualShock 4)** controller via ViGEmBus. On Linux: UHID / uinput |
 | **Hide controller** | **Hide the real controller from games** so they only see the virtual one: no double input. Uses HidHide when it's installed (EdgePad sets it up and undoes it by itself), otherwise exclusive access. On Linux it grabs the controller's input devices |
 | **Portable** | One exe. Settings live in `EdgePad-data/` next to it, so the folder can sit on a USB stick |
 | **Auto update** | Checks GitHub Releases on start, verifies the SHA-256 checksum and swaps in the new exe |
@@ -42,7 +42,11 @@ A regular DualSense works too. It has no back buttons, so the **Mute** button ac
 ## Getting started (Windows)
 
 1. Download `EdgePad-windows-x64.exe` from the [latest release](../../releases/latest) and put it in any folder.
-2. Install the [ViGEmBus driver](https://github.com/nefarius/ViGEmBus/releases/latest) once. It lets EdgePad create the virtual controller that games see.
+2. Install the driver for the virtual controller games will see, once:
+   - **PS5 controller (recommended):** [usbip-win2](https://github.com/vadimgrn/usbip-win2/releases/latest),
+     then choose **Settings → Virtual controller → PlayStation 5 (DualSense)**. No ViGEmBus needed. See
+     [Virtual PS5 controller](#virtual-ps5-controller).
+   - **Xbox 360 / PS4 controller:** the [ViGEmBus driver](https://github.com/nefarius/ViGEmBus/releases/latest).
 3. Recommended: install [HidHide](https://github.com/nefarius/HidHide/releases/latest).
 4. Start EdgePad and connect the controller over USB or Bluetooth. It is picked up automatically.
 5. Turn on **Settings → Hide the real controller from games**. Games then only see the virtual controller, so
@@ -50,10 +54,32 @@ A regular DualSense works too. It has no back buttons, so the **Mute** button ac
 
 If Steam is running, disable Steam Input's PlayStation support for the virtual controller so you only have one remapping layer.
 
-For PlayStation button prompts, set **Settings → Virtual controller → PlayStation (DualShock 4)**. ViGEmBus can't
-emulate a PS5 controller, so games see a PS4 controller. EdgePad passes the DualSense's gyro, accelerometer and
-touchpad through to it, so motion aiming works in games that support it. You can also let games set the
-lightbar colour, like on a real PlayStation controller.
+With ViGEmBus, **PlayStation 4 (DualShock 4)** output also gives PlayStation button prompts. EdgePad passes the
+DualSense's gyro, accelerometer and touchpad through to it, so motion aiming works in games that support it.
+For a PS5 controller, use the [virtual PS5 controller](#virtual-ps5-controller) instead.
+
+## Virtual PS5 controller
+
+**Settings → Virtual controller → PlayStation 5 (DualSense)** gives games a genuine wired DualSense:
+
+- **Windows:** EdgePad acts as a USB DualSense and [usbip-win2](https://github.com/vadimgrn/usbip-win2)
+  (a Microsoft-signed USB/IP driver) plugs it into Windows. Windows then handles it with its own USB
+  and HID drivers, exactly like a real DualSense on a cable. There's no ViGEmBus and no translation to an
+  Xbox or PS4 controller. EdgePad attaches it when it starts and unplugs it cleanly when it closes; it
+  doesn't need admin rights.
+- **Linux:** the kernel's UHID creates the device and its own DualSense driver (`hid-playstation`) takes
+  it over. Install `70-edgepad.rules` for access to `/dev/uhid`.
+
+The virtual controller uses the real DualSense's USB descriptors and HID report descriptor, byte for byte.
+Every input report is your controller's own report with EdgePad's sticks, triggers and buttons written
+in. The sequence number, gyro, accelerometer, touchpad, battery and any undocumented bytes reach the game
+unchanged. With untouched settings the whole report is identical to what the controller sent (unit
+tested). Calibration, MAC address and firmware info come from your controller too, so motion is 1:1.
+
+Games drive the real controller through it, like on a PS5: **adaptive triggers**, rumble and player LEDs
+(and the lightbar if "Let games set the lightbar colour" is on). A profile's trigger resistance keeps
+priority over the game's trigger effects. Turn on **Hide the real controller from games** as well, so
+games see only the virtual DualSense.
 
 ## Hiding the real controller
 
@@ -76,12 +102,14 @@ controller from games** fixes that:
 Programs that already had the controller open keep it until it reconnects. Start games after EdgePad, or
 unplug and replug the controller.
 
-### Why not a custom driver instead of ViGEmBus?
+### Why not EdgePad's own driver?
 
 A virtual controller needs a kernel driver, and Windows 10/11 only load drivers that Microsoft has
 signed. Getting that signature takes an EV code-signing certificate and Microsoft's attestation
 process. The other route, test-signing mode, is blocked by the anti-cheats of most online games.
-ViGEmBus is such a signed driver and adds well under a millisecond. ViGEmBus copies EdgePad's
+That's why the virtual PS5 controller uses usbip-win2, a signed USB/IP driver: with it Windows itself
+treats EdgePad's DualSense as a real USB device. For Xbox 360 / PS4 output, ViGEmBus is the signed
+driver and adds well under a millisecond. ViGEmBus copies EdgePad's
 DualShock 4 report into the virtual controller byte for byte, and passes the Xbox 360 report on as
 is. With untouched settings, the game gets:
 
@@ -105,7 +133,8 @@ sudo udevadm control --reload && sudo udevadm trigger
 ./EdgePad-linux-x64            # or --headless to run without a window
 ```
 
-On Linux the virtual controller is an Xbox 360-style uinput device. Rumble forwarding is Windows only for now.
+On Linux the virtual controller is either a PS5 controller through UHID (games' rumble, adaptive triggers
+and lightbar reach the real controller) or an Xbox 360-style uinput device.
 
 ## Controller shortcuts
 
@@ -198,10 +227,12 @@ Try the UI without a controller with `EdgePad --demo`, which simulates one.
 
 ```
 src/core/       platform independent: stick/trigger processing, RC filter, remapping pipeline,
-                DualSense HID protocol, virtual controller reports and motion calibration,
-                config JSON, versions, SHA-256   (unit tested)
-src/platform/   hidapi / exclusive HID device, controller hiding (HidHide, input grab), ViGEmBus / uinput
-                virtual controller, WinHTTP / curl, portable paths, self-update
+                DualSense HID protocol, virtual DualSense (descriptors, reports, USB/IP protocol),
+                virtual controller reports and motion calibration, config JSON, versions, SHA-256
+                (unit tested)
+src/platform/   hidapi / exclusive HID device, controller hiding (HidHide, input grab), virtual controllers
+                (USB/IP server + usbip-win2 or UHID for the DualSense, ViGEmBus, uinput), WinHTTP / curl,
+                portable paths, self-update
 src/app/        engine thread, updater, config store, Dear ImGui interface, main
 tests/          doctest unit tests
 ```

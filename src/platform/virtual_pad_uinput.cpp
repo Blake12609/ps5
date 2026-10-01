@@ -102,9 +102,13 @@ bool setupAbs(int fd, int code, int min, int max, int fuzz, int flat) {
 
 }  // namespace
 
-const char* virtualPadDriverUrl() { return "https://www.kernel.org/doc/html/latest/input/uinput.html"; }
+const char* virtualPadDriverUrl(OutputKind kind) {
+    return kind == OutputKind::DualSense ? "https://docs.kernel.org/hid/uhid.html"
+                                         : "https://www.kernel.org/doc/html/latest/input/uinput.html";
+}
 
 PadCreateResult createVirtualPad(OutputKind kind, FeedbackCallback /*onFeedback*/) {
+    if (kind == OutputKind::DualSense) return createVirtualDualSense();  // UHID
     PadCreateResult result;
     if (kind == OutputKind::None) {
         result.error = PadError::Unsupported;
