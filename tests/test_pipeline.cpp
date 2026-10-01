@@ -35,7 +35,7 @@ TEST_CASE("back buttons use the profile mapping") {
     CHECK(p.process(pressing(bit(Button::PaddleLeft)), cfg, 0.004f).buttons == bit(Button::Circle));
     cfg.active().buttons[static_cast<size_t>(index(Button::PaddleRight))] = Binding::toButton(Button::R2);
     const OutputState out = p.process(pressing(bit(Button::PaddleRight)), cfg, 0.004f);
-    CHECK(out.buttons == 0);
+    CHECK(out.buttons == bit(Button::R2));  // a full trigger press, digital bit included
     CHECK(out.r2 == 1.0f);
 }
 

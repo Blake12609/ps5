@@ -52,6 +52,7 @@ add_library(edgepad_core STATIC
   src/core/pipeline.cpp
   src/core/dualsense.cpp
   src/core/device_path.cpp
+  src/core/virtual_reports.cpp
   src/core/version.cpp
   src/core/sha256.cpp
   src/core/release_info.cpp
@@ -145,6 +146,7 @@ if(EDGEPAD_BUILD_TESTS)
     tests/test_update.cpp
     tests/test_features.cpp
     tests/test_one_to_one.cpp
+    tests/test_virtual_reports.cpp
   )
   target_link_libraries(edgepad_tests PRIVATE edgepad_core doctest::doctest)
   # Include real std headers instead of doctest's forward declarations (newer MSVC rejects them).

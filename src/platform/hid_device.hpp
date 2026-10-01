@@ -8,6 +8,7 @@
 
 #include "core/dualsense.hpp"
 #include "core/types.hpp"
+#include "core/virtual_reports.hpp"
 
 namespace edgepad {
 
@@ -45,11 +46,15 @@ public:
     ReadResult read(InputState& state, int timeoutMs);
     // Sends lightbar / LEDs / trigger effects / rumble. Skips the write when nothing changed.
     bool sendEffects(const dualsense::Effects& effects);
+    // True when `effects` differ from what the controller last got (a write is due).
+    bool effectsChanged(const dualsense::Effects& effects) const { return !lastSent_ || *lastSent_ != effects; }
 
     dualsense::Connection connection() const { return connection_; }
     uint16_t productId() const { return info_.productId; }
     bool isEdge() const { return info_.productId == dualsense::kDualSenseEdgeProductId; }
     const std::string& lastError() const { return error_; }
+    // The controller's motion sensor calibration (nominal values if it could not be read).
+    const virtual_reports::MotionCalibration& motionCalibration() const { return motionCalibration_; }
 
 private:
     std::unique_ptr<HidTransport> dev_;
@@ -59,6 +64,7 @@ private:
     uint8_t sequence_ = 0;
     bool needsLightbarSetup_ = true;
     std::optional<dualsense::Effects> lastSent_;
+    virtual_reports::MotionCalibration motionCalibration_ = virtual_reports::nominalCalibration();
     std::string error_;
 };
 

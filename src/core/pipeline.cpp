@@ -4,6 +4,8 @@
 #include <cmath>
 #include <utility>
 
+#include "core/axis.hpp"
+
 namespace edgepad {
 namespace {
 
@@ -19,16 +21,23 @@ ButtonMask passthroughMask() {
     return mask;
 }
 
+// Digital L2 / R2 (a DualShock 4 report carries them next to the analog value): the controller's
+// own bit while the trigger reaches the game unchanged (1:1 settings), otherwise "pressed at all",
+// so the bit always agrees with the analog value the game gets (hair trigger, trigger stop...).
+ButtonMask triggerButton(const InputState& in, float out, Button b, bool oneToOne) {
+    const bool pressed = oneToOne ? has(in.buttons, b) : triggerToRaw(out) > 0;
+    return pressed ? bit(b) : 0;
+}
+
 void emit(const Binding& b, OutputState& out) {
     switch (b.kind) {
         case Binding::Kind::Button:
             if (b.button == Button::L2) {
-                out.l2 = 1.0f;
+                out.l2 = 1.0f;  // a full press, digital bit included
             } else if (b.button == Button::R2) {
                 out.r2 = 1.0f;
-            } else {
-                out.buttons |= bit(b.button);
             }
+            out.buttons |= bit(b.button);
             break;
         case Binding::Kind::Key:
             out.keys.set(b.key);
@@ -125,7 +134,7 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
         out.ry = in.ry;
         out.l2 = in.l2;
         out.r2 = in.r2;
-        out.buttons = usable & passthroughMask();
+        out.buttons = (usable & passthroughMask()) | (in.buttons & (bit(Button::L2) | bit(Button::R2)));
         return out;
     }
 
@@ -169,6 +178,8 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     out.ry = rightOut.y;
     out.l2 = l2_.apply(in.l2, p.l2, dtSeconds);
     out.r2 = r2_.apply(in.r2, p.r2, dtSeconds);
+    out.buttons |= triggerButton(in, out.l2, Button::L2, isOneToOne(p.l2)) |
+                   triggerButton(in, out.r2, Button::R2, isOneToOne(p.r2));
 
     // Touchpad zones: where the pad is clicked (or touched) becomes its own button.
     ButtonMask sources = usable;

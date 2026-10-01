@@ -47,6 +47,10 @@ bool isOneToOne(const StickSettings& s);
 inline constexpr float kHairDefaultReset = 0.01f;
 inline constexpr float kHairMinReset = 0.005f;
 
+struct TriggerSettings;
+// True when the settings leave the trigger exactly as the controller sends it (1:1).
+bool isOneToOne(const TriggerSettings& t);
+
 struct TriggerSettings {
     float deadzone = 0.0f;  // start of the effective range (hair trigger: activation point)
     float maxRange = 1.0f;  // end of the effective range (software trigger stop)

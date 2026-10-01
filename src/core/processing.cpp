@@ -89,6 +89,11 @@ bool isOneToOne(const StickSettings& s) {
            s.rcFilter == 0.0f && !s.invertX && !s.invertY;
 }
 
+bool isOneToOne(const TriggerSettings& t) {
+    return t.mode == TriggerMode::Analog && t.deadzone <= 0.0f && t.maxRange >= 1.0f && t.antiDeadzone <= 0.0f &&
+           !t.turbo;
+}
+
 Vec2 processStick(float x, float y, const StickSettings& s) {
     if (s.invertX) x = -x;
     if (s.invertY) y = -y;

@@ -31,7 +31,11 @@ A regular DualSense works too. It has no back buttons, so the **Mute** button ac
 
 - Controller input runs on its own thread, driven by the controller's HID reports (no polling sleeps).
 - A report is turned into virtual controller output in microseconds.
-- The virtual controller is only updated when the output actually changes.
+- Every controller report goes straight to the virtual controller. ViGEmBus silently drops an update
+  when the game side has no read waiting, so EdgePad never relies on a single update getting through.
+  The next report (1–4 ms later) always carries the current state.
+- Lightbar, LED, adaptive-trigger and rumble writes are capped at one per 10 ms. These writes can block for a
+  few ms, especially over Bluetooth, and fast-changing game rumble could otherwise hold up input.
 - On Windows the input thread runs at high priority, so a busy game can't delay a controller report.
 - The UI renders at full rate only while focused; in the background it drops to about 15 fps, and it stops rendering while minimized.
 
@@ -57,7 +61,8 @@ If a game sees both the real DualSense and EdgePad's virtual controller, it gets
 remapped and once raw. Aim then fights itself, and the controller "feels off". **Settings → Hide the real
 controller from games** fixes that:
 
-- **Windows with HidHide:** EdgePad adds itself to HidHide's allowed applications, hides the controller from
+- **Windows with HidHide:** EdgePad adds itself to HidHide's allowed applications (it does this on every
+  start, so it can always open the controller, even one you hid in HidHide by hand), hides the controller from
   every other program and switches HidHide on. With HidHide 2 the hiding belongs to EdgePad's process, so
   the driver ends it the moment EdgePad closes, even after a crash. With older versions EdgePad removes its
   entry when it closes, or on its next start. You don't need to touch HidHide's own settings.
@@ -76,8 +81,18 @@ unplug and replug the controller.
 A virtual controller needs a kernel driver, and Windows 10/11 only load drivers that Microsoft has
 signed. Getting that signature takes an EV code-signing certificate and Microsoft's attestation
 process. The other route, test-signing mode, is blocked by the anti-cheats of most online games.
-ViGEmBus is such a signed driver and adds well under a millisecond. When EdgePad leaves a stick
-untouched, the game gets it exactly as the controller sent it, step for step. What usually makes it
+ViGEmBus is such a signed driver and adds well under a millisecond. ViGEmBus copies EdgePad's
+DualShock 4 report into the virtual controller byte for byte, and passes the Xbox 360 report on as
+is. With untouched settings, the game gets:
+
+- every stick and trigger value exactly as the controller sent it (all 256 steps, both ends,
+  diagonals);
+- the controller's own L2/R2 "pressed" bits, every button and the d-pad;
+- motion in the same degrees per second and g as from the real DualSense. The virtual DualShock 4
+  reports a fixed calibration, and EdgePad converts the gyro and accelerometer with both
+  calibrations, the way SDL reads them (the library many PC games use for PlayStation controllers).
+
+The reports are built in platform-independent code and unit tested byte by byte. What usually makes it
 feel different is the real controller being visible next to the virtual one (above), or extra
 processing (dead zones, curves) on top of the game's own.
 
@@ -183,7 +198,8 @@ Try the UI without a controller with `EdgePad --demo`, which simulates one.
 
 ```
 src/core/       platform independent: stick/trigger processing, RC filter, remapping pipeline,
-                DualSense HID protocol, config JSON, versions, SHA-256   (unit tested)
+                DualSense HID protocol, virtual controller reports and motion calibration,
+                config JSON, versions, SHA-256   (unit tested)
 src/platform/   hidapi / exclusive HID device, controller hiding (HidHide, input grab), ViGEmBus / uinput
                 virtual controller, WinHTTP / curl, portable paths, self-update
 src/app/        engine thread, updater, config store, Dear ImGui interface, main

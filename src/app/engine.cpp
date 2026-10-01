@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "core/pipeline.hpp"
+#include "core/virtual_reports.hpp"
 #include "platform/controller_hide.hpp"
 #include "platform/hid_device.hpp"
 #include "platform/keyboard.hpp"
@@ -97,8 +98,11 @@ void Engine::run() {
     OutputKind lastAttemptKind = OutputKind::Count;
     Clock::time_point nextPadAttempt{};
     Clock::time_point nextScan{};
-    OutputState lastSent;
-    bool forceSend = true;
+    // Lightbar, LEDs, trigger effects and rumble are written at most this often (the latest state
+    // wins): a write can block for a few ms, especially over Bluetooth, and must never hold up
+    // reading the controller - with game rumble changing every frame it otherwise could.
+    constexpr auto kEffectsInterval = std::chrono::milliseconds(10);
+    Clock::time_point nextEffectsWrite{};
 
     const Clock::time_point demoStart = Clock::now();
     Clock::time_point lastReport = Clock::now();
@@ -204,7 +208,6 @@ void Engine::run() {
                 for (const auto& info : enumerateControllers()) {
                     if (openController(info)) {
                         pipeline.reset();
-                        forceSend = true;
                         lastReport = Clock::now();
                         lastAttemptKind = OutputKind::Count;
                         std::lock_guard lock(mutex_);
@@ -243,7 +246,6 @@ void Engine::run() {
             if (created.pad) {
                 pad = std::move(created.pad);
                 padKind = wanted;
-                forceSend = true;
                 status_.padName = pad->name();
                 status_.padMessage.clear();
                 status_.padError = PadError::None;
@@ -282,13 +284,21 @@ void Engine::run() {
 
             PipelineEvents events;
             const OutputState output = pipeline.process(input, cfg, dt, &events);
-            syncKeys(output.keys);
 
-            if (pad && (forceSend || output != lastSent)) {
-                if (pad->send(output)) {
-                    lastSent = output;
-                    forceSend = false;
-                } else {
+            if (pad) {
+                // Sent with every controller report, changed or not: ViGEmBus drops an update that
+                // arrives while the game side has no read waiting (and still reports success), so
+                // the next report puts the current state through within a few ms. Repeating an
+                // unchanged report costs next to nothing.
+                OutputState toPad = output;
+                if (padKind == OutputKind::DualShock4) {
+                    // Motion: the game computes the same degrees per second and g from the virtual
+                    // controller as from the real one (their calibrations differ).
+                    toPad.motion = virtual_reports::remapMotion(
+                        output.motion, demo_ ? virtual_reports::nominalCalibration() : device.motionCalibration(),
+                        virtual_reports::virtualDs4Calibration());
+                }
+                if (!pad->send(toPad)) {
                     dropPad();
                     nextPadAttempt = t + std::chrono::seconds(2);
                     std::lock_guard lock(mutex_);
@@ -296,6 +306,7 @@ void Engine::run() {
                     status_.padMessage = "Virtual controller was removed";
                 }
             }
+            syncKeys(output.keys);
 
             ++reportsInWindow;
             const float window = std::chrono::duration<float>(t - rateWindowStart).count();
@@ -328,8 +339,14 @@ void Engine::run() {
             gameLightbar = std::array<uint8_t, 3>{static_cast<uint8_t>(lb >> 16), static_cast<uint8_t>(lb >> 8),
                                                   static_cast<uint8_t>(lb)};
         }
-        device.sendEffects(effectsForConfig(cfg, static_cast<uint8_t>(rumble >> 8), static_cast<uint8_t>(rumble & 0xFF),
-                                            gameLightbar));
+        const dualsense::Effects effects =
+            effectsForConfig(cfg, static_cast<uint8_t>(rumble >> 8), static_cast<uint8_t>(rumble & 0xFF), gameLightbar);
+        if (device.isOpen() && device.effectsChanged(effects)) {
+            if (const Clock::time_point t = Clock::now(); t >= nextEffectsWrite) {
+                device.sendEffects(effects);
+                nextEffectsWrite = t + kEffectsInterval;
+            }
+        }
     }
 
     syncKeys(KeyMask{});

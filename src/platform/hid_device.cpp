@@ -33,7 +33,7 @@ public:
         return hid_read_timeout(dev_, buffer, size, timeoutMs);
     }
     bool write(const uint8_t* data, size_t size) override { return hid_write(dev_, data, size) >= 0; }
-    void getFeature(uint8_t* buffer, size_t size) override { hid_get_feature_report(dev_, buffer, size); }
+    int getFeature(uint8_t* buffer, size_t size) override { return hid_get_feature_report(dev_, buffer, size); }
     std::string error() const override { return hidError(dev_); }
 
 private:
@@ -94,10 +94,12 @@ bool DualSenseDevice::open(const HidDeviceInfo& info, std::string& error, bool e
     lastSent_.reset();
     error_.clear();
 
-    // Reading the calibration feature report switches Bluetooth controllers from the
-    // reduced "simple" report to the full report (with Edge buttons, battery, ...).
+    // Reading the calibration feature report switches Bluetooth controllers from the reduced
+    // "simple" report to the full report (with Edge buttons, battery, ...). It also holds the
+    // motion sensor calibration games use, needed to pass motion on 1:1.
     unsigned char feature[64] = {dualsense::kCalibrationFeatureReportId};
-    dev_->getFeature(feature, sizeof(feature));
+    const int n = dev_->getFeature(feature, sizeof(feature));
+    motionCalibration_ = virtual_reports::parseDualSenseCalibration(feature, n > 0 ? static_cast<size_t>(n) : 0);
     return true;
 }
 

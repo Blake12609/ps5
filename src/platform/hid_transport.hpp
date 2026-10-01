@@ -15,8 +15,8 @@ public:
     // Bytes read (report id first), 0 on timeout, -1 on error.
     virtual int read(uint8_t* buffer, size_t size, int timeoutMs) = 0;
     virtual bool write(const uint8_t* data, size_t size) = 0;
-    // `buffer[0]` holds the report id on entry.
-    virtual void getFeature(uint8_t* buffer, size_t size) = 0;
+    // `buffer[0]` holds the report id on entry. Returns the bytes read (report id first), or -1.
+    virtual int getFeature(uint8_t* buffer, size_t size) = 0;
     virtual std::string error() const = 0;
 };
 

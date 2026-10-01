@@ -154,6 +154,20 @@ private:
     DWORD error_ = 0;
 };
 
+// Makes sure EdgePad itself may open hidden devices (with "inverse" mode the list means the opposite).
+bool allowSelf(Control& control) {
+    const std::wstring image = ownImageName();
+    StringList whitelist;
+    bool inverse = false;
+    if (image.empty() || !control.getList(kGetWhitelist, whitelist) || !control.getFlag(kGetInverse, inverse)) return false;
+    if (!inverse && !contains(whitelist, image)) {
+        whitelist.push_back(image);
+        return control.setList(kSetWhitelist, whitelist);
+    }
+    if (inverse && removeFrom(whitelist, image)) return control.setList(kSetWhitelist, whitelist);
+    return true;
+}
+
 std::string unavailableReason(const Control& control) {
     if (control.missing()) return "HidHide is not installed";
     if (control.error() == ERROR_ACCESS_DENIED) return "HidHide is busy (close the HidHide Configuration Client)";
@@ -218,6 +232,8 @@ ControllerHider::ControllerHider(std::filesystem::path stateFile) : impl_(std::m
     impl_->stateFile = std::move(stateFile);
     impl_->load();
     impl_->undo();  // left over from a crash
+    // EdgePad must always be able to open the controller, also when it was hidden in HidHide by hand.
+    if (Control control; control.ok()) allowSelf(control);
 }
 
 ControllerHider::~ControllerHider() { restore(); }
@@ -244,22 +260,10 @@ bool ControllerHider::hide(const std::string& hidPath, std::string& message) {
         return false;
     }
 
-    // Allow list: EdgePad itself must keep access (with "inverse" mode the list means the opposite).
-    const std::wstring image = ownImageName();
-    StringList whitelist;
-    bool inverse = false;
-    if (image.empty() || !control.getList(kGetWhitelist, whitelist) || !control.getFlag(kGetInverse, inverse)) {
-        message = "could not read HidHide's settings";
+    // Allow list first: EdgePad itself must keep access.
+    if (!allowSelf(control)) {
+        message = "could not add EdgePad to HidHide's allowed applications";
         return false;
-    }
-    if (!inverse && !contains(whitelist, image)) {
-        whitelist.push_back(image);
-        if (!control.setList(kSetWhitelist, whitelist)) {
-            message = "could not add EdgePad to HidHide's allowed applications";
-            return false;
-        }
-    } else if (inverse && removeFrom(whitelist, image)) {
-        control.setList(kSetWhitelist, whitelist);
     }
 
     // Block list: a process-lifetime entry (HidHide 2), else a normal one EdgePad removes later.

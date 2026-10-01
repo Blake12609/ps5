@@ -118,7 +118,7 @@ public:
         return true;
     }
 
-    void getFeature(uint8_t* buffer, size_t size) override {
+    int getFeature(uint8_t* buffer, size_t size) override {
         std::vector<uint8_t> report(std::max(size, featureLength_), uint8_t{0});
         report[0] = buffer[0];
         OVERLAPPED ol{};
@@ -131,7 +131,10 @@ public:
             if (WaitForSingleObject(ioEvent_, kWriteTimeoutMs) != WAIT_OBJECT_0) CancelIoEx(handle_, &ol);
             ok = GetOverlappedResult(handle_, &ol, &n, TRUE);
         }
-        if (ok) std::memcpy(buffer, report.data(), std::min(size, report.size()));
+        if (!ok) return -1;
+        const size_t count = std::min<size_t>({size, report.size(), static_cast<size_t>(n)});
+        std::memcpy(buffer, report.data(), count);
+        return static_cast<int>(count);
     }
 
     std::string error() const override { return error_.empty() ? std::string("unknown HID error") : error_; }
