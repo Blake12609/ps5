@@ -25,13 +25,14 @@ struct StickSettings {
     // game's own dead zone handles resting noise (like playing on the controller directly).
     float deadzone = 0.0f;       // inner dead zone, fraction of full throw
     float outerDeadzone = 0.0f;  // outer edge treated as full deflection
-    float antiDeadzone = 0.0f;    // minimum output once past the dead zone (cancels in-game dead zones)
+    float antiDeadzone = 0.0f;    // output as soon as the stick moves: makes the game's dead zone smaller
     DeadzoneShape shape = DeadzoneShape::Radial;
     Curve curve = Curve::Default;
     float curveIntensity = 0.5f;  // 0..1, how strongly the curve bends
     std::vector<CurvePoint> customCurve{{0.25f, 0.15f}, {0.5f, 0.4f}, {0.75f, 0.7f}};
     // GameSir style RC filter, -1..1, only active while the stick is moved.
-    // Positive: RC low-pass "stabilizer". Negative: "jitter" that keeps the aim speed unchanged.
+    // Positive: RC low-pass "stabilizer" (smooth). Negative: the same RC filter flipped to amplify
+    // (jitter from your own stick movement), applied so the aim speed stays exactly the same.
     float rcFilter = 0.0f;
     bool invertX = false;
     bool invertY = false;
@@ -41,6 +42,11 @@ struct StickSettings {
 
 // True when the settings leave the stick exactly as the controller sends it (1:1).
 bool isOneToOne(const StickSettings& s);
+
+// The anti-dead zone eases in over the first two sensor steps of stick travel: the output reaches
+// the anti-dead zone (the edge of the game's own dead zone) right away, but a resting stick that
+// flickers by one step stays below half of it, so it does not drift. No dead zone is added.
+inline constexpr float kAntiDeadzoneEase = 2.0f / 128.0f;
 
 // Hair trigger reset distance: default 1% (about 3 steps of the trigger sensor, so holding the
 // trigger steady never releases it by accident), minimum 0.5%.
@@ -113,15 +119,12 @@ private:
     bool active_ = false;
 };
 
-// Maximum time constant of the RC low-pass at rcFilter = 1.0 (seconds).
+// Time constant of the RC filter at rcFilter = +-1.0 (seconds).
 inline constexpr float kRcMaxTimeConstant = 0.040f;
-// Jitter at rcFilter = -1.0: sideways movement as a fraction of full stick throw.
-inline constexpr float kRcMaxJitter = 0.06f;
-// A new jitter swing starts every 5 ms (fixed clock: the same at 250 or 1000 Hz) ...
-inline constexpr float kRcJitterStepSeconds = 0.005f;
-// ... and moves there through an RC stage with this time constant.
-inline constexpr float kRcJitterSmoothSeconds = 0.002f;
-// The jitter never turns the aim further than this (only matters for tiny stick movements).
+// Amplify at rcFilter = -1.0: what the RC low-pass would remove is added back this many times
+// (a gain of 1 is the exact mirror of the stabilizer).
+inline constexpr float kRcMaxAmplify = 8.0f;
+// The amplified part never turns the aim further than this (only matters for tiny stick movements).
 inline constexpr float kRcJitterMaxAngle = 0.5236f;  // 30 degrees
 // The RC filter only runs once the stick is pushed past its dead zone, and at least this far,
 // so stick noise at rest never triggers it.
@@ -175,29 +178,25 @@ private:
 // True while the stick is being moved, i.e. pushed past its dead zone.
 bool stickActive(float x, float y, const StickSettings& s);
 
-// GameSir style RC filter. It only works while the stick is moved (`active`); at rest the stick is
-// left alone, so nothing is added and letting go stops instantly.
-//  strength > 0 (stabilizer): RC low-pass on the raw stick (time constant up to 40 ms), applied
-//                             before processStick(). Lags slightly behind the thumb and smooths.
-//  strength < 0 (jitter):     micro-jitter on the processed output, applied after processStick().
-//                             Every 5 ms the aim swings to the other side by a random 50-100% of the
-//                             amount, shaped by an RC stage. It only rotates the stick direction, so
-//                             the stick length - the aim speed - stays exactly what the thumb does.
+// GameSir style RC filter: a first order RC filter, y += alpha * (x - y) with
+// alpha = dt / (RC + dt), on the stick signal. It only works while the stick is moved (`active`);
+// at rest the stick is left alone, so nothing is added and letting go stops instantly.
+//  strength > 0 (Smooth / stabilizer): the RC low-pass itself, on the raw stick before
+//      processStick(), time constant up to 40 ms. Lags slightly behind the thumb and smooths.
+//  strength < 0 (Amplify / jitter): the same RC filter flipped around: what the low-pass would
+//      take away - quick changes, thumb tremor, sensor noise - is added back, amplified up to 8x,
+//      on the processed output. Every bit of your own stick movement turns into jitter, like
+//      GameSir's Amplify mode. Only the sideways part is applied, as a turn of the stick, so the
+//      stick length - the aim speed - stays exactly what the thumb does.
 class RcFilter {
 public:
     Vec2 apply(Vec2 raw, float strength, float dtSeconds, bool active);
-    Vec2 jitter(Vec2 out, float strength, float dtSeconds, bool active);
+    Vec2 amplify(Vec2 out, float strength, float dtSeconds, bool active);
     void reset();
 
 private:
-    float random01();
-
-    Vec2 state_{};          // the stabilizer's RC low-pass
-    float jitter_ = 0.0f;   // current jitter, -1..1, follows target_ through an RC stage
-    float target_ = 0.0f;   // where the current swing is heading
-    float side_ = 1.0f;     // side of the last swing
-    float clock_ = 0.0f;    // time since the last swing
-    uint32_t rng_ = 0x9E3779B9u;
+    Vec2 state_{};    // the stabilizer's RC low-pass (raw stick)
+    Vec2 lowPass_{};  // the amplifier's RC low-pass (processed stick)
 };
 
 }  // namespace edgepad

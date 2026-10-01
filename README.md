@@ -10,9 +10,9 @@ as a single portable executable, and updates itself from this repository's relea
 
 | Area | What you get |
 | --- | --- |
-| **Sticks** | **Exactly 1:1 by default**: every stick step reaches the game as the controller sent it, diagonals included. Inner / outer dead zone, **anti-dead zone**, radial or axial dead zone, invert X/Y, swap sticks, one-click **drift calibration** |
+| **Sticks** | **Exactly 1:1 by default**: every stick step reaches the game as the controller sent it, diagonals included. **Anti-dead zone** that shrinks the game's own dead zone (it adds none itself), inner / outer dead zone, radial or axial dead zone, invert X/Y, swap sticks, one-click **drift calibration** |
 | **Response curves** | DualSense Edge presets (Default, Quick, Precise, Steady, Digital, Dynamic) with adjustable strength, plus a **Custom** curve you drag with the mouse |
-| **RC filter** | GameSir style, active only while you move the stick. Positive = *stabilizer* (RC low-pass that removes micro-jitter). Negative = *jitter* that wobbles the aim direction while keeping your aim speed exactly the same |
+| **RC filter** | GameSir style: a real RC filter on the stick, active only while you move it. Positive = *Smooth* (RC low-pass that removes micro-jitter). Negative = *Amplify*, the same filter flipped, so your own stick movement becomes jitter in the aim direction while your aim speed stays exactly the same |
 | **Triggers** | Dead zone, **trigger stop** (short trigger range), anti-dead zone, **rapid hair trigger** (full press the moment you pull, releases as soon as you ease off, fires again without letting go), **turbo** (1–100 ms between presses), adaptive-trigger **resistance wall** that makes the stop something you can feel |
 | **Gyro aiming** | Turn or tilt the controller to fine-aim on top of the right stick. Always on, while a button is held (e.g. L2 for aim down sights) or toggled. Sensitivity, vertical speed, yaw or roll, dead zone, smoothing for slow movements only, anti-dead zone, drift calibration |
 | **Buttons** | Map any button, including the Edge **back buttons**, to a controller button, full L2/R2 press, **keyboard key** or **mouse button**, or disable it. Per-button **toggle** and **turbo** with its own 1–100 ms interval |
@@ -155,8 +155,10 @@ the stick**, meaning while it's pushed past its dead zone (at least 3%). With yo
 nothing is added, even with a 0% dead zone or an anti-dead zone, and letting go stops instantly with no
 smoothing tail.
 
-- **Positive values (stabilizer):** an RC low-pass on the raw stick, with a time constant of up to 40 ms. It lags slightly behind your thumb, which removes micro-stutter so aim feels heavier and more consistent.
-- **Negative values (jitter):** while you aim, the aim keeps swinging a tiny amount to alternating sides. A new swing starts every 5 ms, with a random size of 50–100% of the setting (up to 6% of stick travel). It moves through an RC stage, so it looks like an analog signal rather than a hard on/off switch. It only rotates the stick direction, so the stick length (your aim speed) stays exactly what your thumb is doing. It also averages out, so your aim never drifts. Some games keep aim assist engaged with this. **Some online games treat it as aim-assist abuse, so check the rules of the game you play.**
+It's a real first-order RC filter, `y += α·(x − y)` with `α = dt / (RC + dt)`, on the stick signal:
+
+- **Positive values (Smooth):** the RC low-pass on the raw stick, with a time constant of up to 40 ms. It lags slightly behind your thumb, which removes micro-stutter so aim feels heavier and more consistent.
+- **Negative values (Amplify):** the same RC filter flipped around, like GameSir's Amplify mode. Whatever the low-pass would remove (quick changes, thumb tremor, sensor noise) is added back, amplified up to 8×. At a gain of 1 it's the exact mirror of the stabilizer. So the jitter comes from your own stick movement, not from a random generator. Only its sideways part is applied, as a turn of the aim direction: the stick length (your aim speed) stays exactly what your thumb is doing, and a stick held perfectly still gets nothing. Some games keep aim assist engaged with this. **Some online games treat it as aim-assist abuse, so check the rules of the game you play.**
 
 The filter is time-based, so it feels the same at 250 Hz or 1000 Hz.
 

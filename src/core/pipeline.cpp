@@ -155,8 +155,8 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     const Vec2 right = rightFilter_.apply(rightRaw, p.rightStick.rcFilter, dtSeconds, rightActive);
     Vec2 leftOut = processStick(left.x, left.y, p.leftStick);
     Vec2 rightOut = processStick(right.x, right.y, p.rightStick);
-    leftOut = leftFilter_.jitter(leftOut, p.leftStick.rcFilter, dtSeconds, leftActive);
-    rightOut = rightFilter_.jitter(rightOut, p.rightStick.rcFilter, dtSeconds, rightActive);
+    leftOut = leftFilter_.amplify(leftOut, p.leftStick.rcFilter, dtSeconds, leftActive);
+    rightOut = rightFilter_.amplify(rightOut, p.rightStick.rcFilter, dtSeconds, rightActive);
     if (p.swapSticks) std::swap(leftOut, rightOut);
 
     // Gyro aiming adds to the right stick.

@@ -390,6 +390,19 @@ Config configFromJson(const std::string& text, std::string* warning) {
             if (mute.kind == Binding::Kind::Disabled) mute = Binding::toButton(Button::Mute);
         }
     }
+    if (version < 5) {
+        // Before version 5 an anti-dead zone needed a 5% inner dead zone (the FPS profile shipped
+        // with 5% / 2%), which added dead zone instead of removing it. It needs none now.
+        for (auto& p : cfg.profiles) {
+            for (StickSettings* st : {&p.leftStick, &p.rightStick}) {
+                if (st->antiDeadzone > 0.0f && std::fabs(st->deadzone - 0.05f) < 1e-4f &&
+                    std::fabs(st->outerDeadzone - 0.02f) < 1e-4f) {
+                    st->deadzone = 0.0f;
+                    st->outerDeadzone = 0.0f;
+                }
+            }
+        }
+    }
     cfg.normalize();
     return cfg;
 }

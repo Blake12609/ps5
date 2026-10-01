@@ -134,16 +134,19 @@ TEST_CASE("RC jitter only acts while the stick is moved and keeps the aim speed"
         CHECK(std::fabs(out.rx) == doctest::Approx(processStick(0.015f, 0.0f, right).x));
         CHECK(out.ry == 0.0f);
     }
-    // Aiming right: the stick length (aim speed) is untouched while the direction jitters.
-    InputState aiming;
-    aiming.rx = 0.6f;
-    const float speed = processStick(0.6f, 0.0f, right).x;
+    // Aiming right with a slightly unsteady thumb: the stick length (aim speed) is untouched while
+    // the direction jitters to both sides, more than the thumb itself moves.
     bool up = false, down = false;
-    for (int i = 0; i < 50; ++i) {
+    for (int i = 0; i < 100; ++i) {
+        InputState aiming;
+        aiming.rx = 0.6f;
+        aiming.ry = 0.012f * std::sin(static_cast<float>(i) * 0.25f);
+        const Vec2 expected = processStick(aiming.rx, aiming.ry, right);
         const OutputState out = p.process(aiming, cfg, 0.004f);
-        CHECK(std::hypot(out.rx, out.ry) == doctest::Approx(speed).epsilon(1e-4));
-        up |= out.ry > 0.0f;
-        down |= out.ry < 0.0f;
+        CHECK(std::hypot(out.rx, out.ry) == doctest::Approx(std::hypot(expected.x, expected.y)).epsilon(1e-4));
+        const float extra = std::atan2(out.ry, out.rx) - std::atan2(expected.y, expected.x);
+        up |= extra > 0.01f;
+        down |= extra < -0.01f;
     }
     CHECK(up);
     CHECK(down);

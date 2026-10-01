@@ -710,34 +710,35 @@ private:
         changed_ |= sliderPercent("Outer dead zone", &s.outerDeadzone, 0, 30,
                                   "The outer edge that already counts as full deflection.");
         changed_ |= sliderPercent("Anti-dead zone", &s.antiDeadzone, 0, 60,
-                                  "Jumps the output past the game's own dead zone so tiny movements register. "
-                                  "Set it to roughly the game's dead zone (often 10-25%).");
+                                  "Makes the game's own dead zone smaller: as soon as the stick moves, the output "
+                                  "starts at this value - where the game starts to react - so the tiniest movement "
+                                  "registers. It adds no dead zone of its own. Set it to about the game's dead zone "
+                                  "(often 10-25%); higher makes small movements jump.");
         changed_ |= enumCombo("Response curve", s.curve, curveLabel);
         ImGui::BeginDisabled(s.curve == Curve::Default || s.curve == Curve::Custom);
         changed_ |= sliderPercent("Curve strength", &s.curveIntensity, 0, 100);
         ImGui::EndDisabled();
 
         float rc = s.rcFilter * 100.0f;
-        const char* rcFormat = rc > 0.5f ? "%+.0f stabilizer" : (rc < -0.5f ? "%+.0f jitter" : "off");
+        const char* rcFormat = rc > 0.5f ? "%+.0f smooth" : (rc < -0.5f ? "%+.0f amplify" : "off");
         if (ImGui::SliderFloat("RC filter", &rc, -100.0f, 100.0f, rcFormat, ImGuiSliderFlags_AlwaysClamp)) {
             s.rcFilter = std::abs(rc) < 0.5f ? 0.0f : rc / 100.0f;
             changed_ = true;
         }
         helpMarker(
-            "GameSir style RC filter. It only works while you move the stick (pushed past its dead zone): "
-            "with your thumb off the stick nothing is added, and letting go stops instantly.\n\n"
-            "Positive = stabilizer: an RC low-pass filter (time constant up to 40 ms) that lags slightly behind "
-            "your thumb, removing micro-jitter so aim feels heavier and steadier.\n\n"
-            "Negative = jitter: while you aim, the aim keeps swinging a tiny bit to alternating sides (every 5 ms, "
-            "random size, RC-shaped like an analog signal). It only turns the stick direction - the stick length, "
-            "i.e. your aim speed, stays exactly what your thumb does, and it averages out so the aim never "
-            "drifts. This keeps some games' aim assist engaged. Some online games treat this as aim-assist abuse "
-            "- check the rules of the game you play.\n\nCtrl+click the slider to type an exact value.");
+            "GameSir style RC filter: a real RC (resistor-capacitor) filter on the stick signal. It only works "
+            "while you move the stick: with your thumb off the stick nothing is added, and letting go stops "
+            "instantly.\n\n"
+            "Positive = Smooth (stabilizer): the RC low-pass, time constant up to 40 ms. It lags slightly behind "
+            "your thumb and removes micro-jitter, so aim feels heavier and steadier.\n\n"
+            "Negative = Amplify (jitter): the same RC filter flipped around, like GameSir's Amplify mode. What "
+            "the smoothing would remove - quick changes, thumb tremor, sensor noise - is added back, up to 8x, "
+            "so your own stick movement turns into jitter. Only its sideways part is used, as a turn of the aim "
+            "direction: the stick length - your aim speed - stays exactly what your thumb does, and holding the "
+            "stick perfectly still adds nothing. This keeps some games' aim assist engaged. Some online games "
+            "treat it as aim-assist abuse - check the rules of the game you play.\n\n"
+            "Ctrl+click the slider to type an exact value.");
 
-        if (s.antiDeadzone > 0.0f && s.deadzone < 0.02f) {
-            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kWarn),
-                               "Anti-dead zone needs a small dead zone (3-5%%), or resting noise is boosted too.");
-        }
         changed_ |= enumCombo("Dead zone shape", s.shape, shapeLabel);
         changed_ |= ImGui::Checkbox("Invert X", &s.invertX);
         ImGui::SameLine();
@@ -1338,11 +1339,13 @@ private:
         ImGui::SeparatorText("What the settings do");
         ImGui::BulletText("Sticks start exactly 1:1 (no dead zone, default curve): the game gets every step the "
                           "controller sends. Make 1:1 resets a stick back to that.");
-        ImGui::BulletText("Dead zone / anti-dead zone: ignore drift, then jump past the game's own dead zone.");
+        ImGui::BulletText("Anti-dead zone: makes the game's own dead zone smaller - the tiniest movement registers. "
+                          "Dead zone: ignores a drifting stick (or use Calibrate sticks).");
         ImGui::BulletText("Curves: Quick, Precise, Steady, Digital and Dynamic mirror the DualSense Edge presets; "
                           "Custom lets you drag your own curve.");
-        ImGui::BulletText("RC filter: positive values smooth the stick (stabilizer), negative values add jitter - "
-                          "only while you move the stick.");
+        ImGui::BulletText("RC filter: positive values smooth the stick (RC low-pass), negative values flip it to "
+                          "amplify your own movement into jitter without changing aim speed - only while you move "
+                          "the stick.");
         ImGui::BulletText("PlayStation 5 (DualSense) output gives games a genuine PS5 controller: adaptive triggers, "
                           "rumble and lightbar from games reach your controller. PS4 output passes gyro and touchpad too.");
         ImGui::BulletText("Trigger stop + resistance wall: shorter trigger pulls like the Edge's hardware stops.");

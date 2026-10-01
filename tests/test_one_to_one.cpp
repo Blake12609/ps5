@@ -103,12 +103,24 @@ TEST_CASE("idle gyro aiming leaves the right stick alone") {
     CHECK(stickToRaw(-out.ry) == 8);
 }
 
-TEST_CASE("the FPS profile keeps a dead zone for its anti-dead zone") {
+TEST_CASE("the FPS profile's anti-dead zone comes without a dead zone") {
     const Config cfg = Config::defaults();
     const Profile& fps = cfg.profiles[1];
     CHECK(fps.rightStick.antiDeadzone > 0.0f);
-    CHECK(fps.rightStick.deadzone == doctest::Approx(0.05f));
+    CHECK(fps.rightStick.deadzone == 0.0f);
+    CHECK(fps.rightStick.outerDeadzone == 0.0f);
     CHECK_FALSE(isOneToOne(fps.rightStick));
+}
+
+TEST_CASE("old files drop the 5% dead zone an anti-dead zone used to need") {
+    const std::string v4 = R"({"version": 4, "profiles": [
+        {"right_stick": {"deadzone": 0.05, "outer_deadzone": 0.02, "anti_deadzone": 0.12}},
+        {"right_stick": {"deadzone": 0.08, "outer_deadzone": 0.02, "anti_deadzone": 0.12}}]})";
+    const Config cfg = configFromJson(v4);
+    CHECK(cfg.profiles[0].rightStick.deadzone == 0.0f);
+    CHECK(cfg.profiles[0].rightStick.outerDeadzone == 0.0f);
+    CHECK(cfg.profiles[0].rightStick.antiDeadzone == doctest::Approx(0.12f));
+    CHECK(cfg.profiles[1].rightStick.deadzone == doctest::Approx(0.08f));  // chosen on purpose
 }
 
 TEST_CASE("old files move sticks still on the old 5% default to 1:1") {
@@ -119,7 +131,7 @@ TEST_CASE("old files move sticks still on the old 5% default to 1:1") {
     const Config cfg = configFromJson(v2);
     CHECK(cfg.profiles[0].leftStick.deadzone == 0.0f);
     CHECK(cfg.profiles[0].leftStick.outerDeadzone == 0.0f);
-    CHECK(cfg.profiles[0].rightStick.deadzone == doctest::Approx(0.05f));  // anti-dead zone needs it
+    CHECK(cfg.profiles[0].rightStick.deadzone == 0.0f);  // the anti-dead zone needs none either
     CHECK(cfg.profiles[1].leftStick.deadzone == doctest::Approx(0.08f));   // chosen on purpose
 
     const std::string v3 = R"({"version": 3, "profiles": [{"left_stick": {"deadzone": 0.05, "outer_deadzone": 0.02}}]})";

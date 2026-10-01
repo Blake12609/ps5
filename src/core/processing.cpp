@@ -40,10 +40,13 @@ float normalizeThrow(float r, const StickSettings& s) {
 }
 
 float shapeMagnitude(float t, const StickSettings& s) {
-    const float c = clamp01(applyCurve(t, s.curve, s.curveIntensity, s.customCurve));
-    if (c <= 0.0f) return 0.0f;
     const float ad = clamp01(s.antiDeadzone);
-    return ad + (1.0f - ad) * c;
+    if (ad <= 0.0f) return clamp01(applyCurve(t, s.curve, s.curveIntensity, s.customCurve));
+    // Anti-dead zone: straight to the edge of the game's dead zone, within two sensor steps.
+    if (t <= 0.0f) return 0.0f;
+    if (t < kAntiDeadzoneEase) return ad * t / kAntiDeadzoneEase;
+    const float rest = (t - kAntiDeadzoneEase) / (1.0f - kAntiDeadzoneEase);
+    return ad + (1.0f - ad) * clamp01(applyCurve(rest, s.curve, s.curveIntensity, s.customCurve));
 }
 
 }  // namespace
@@ -290,36 +293,24 @@ Vec2 RcFilter::apply(Vec2 raw, float strength, float dtSeconds, bool active) {
     return state_;
 }
 
-float RcFilter::random01() {
-    rng_ ^= rng_ << 13;
-    rng_ ^= rng_ >> 17;
-    rng_ ^= rng_ << 5;
-    return static_cast<float>(rng_ >> 8) / static_cast<float>(1u << 24);
-}
-
-Vec2 RcFilter::jitter(Vec2 out, float strength, float dtSeconds, bool active) {
+Vec2 RcFilter::amplify(Vec2 out, float strength, float dtSeconds, bool active) {
     strength = clamp11(strength);
     const float length = std::hypot(out.x, out.y);
     if (!active || strength >= 0.0f || length <= 1e-4f) {
-        jitter_ = 0.0f;
-        target_ = 0.0f;
-        clock_ = 0.0f;
+        lowPass_ = out;  // follow the stick: the next movement starts from where it really is
         return out;
     }
-    const float dt = std::clamp(dtSeconds, 0.0f, 0.1f);
-    clock_ += dt;
-    if (target_ == 0.0f || clock_ >= kRcJitterStepSeconds) {
-        // Next swing: always to the other side (so it averages out), random size 50-100%.
-        clock_ = target_ == 0.0f ? 0.0f : std::fmod(clock_, kRcJitterStepSeconds);
-        side_ = -side_;
-        target_ = side_ * (0.5f + 0.5f * random01());
-    }
-    // RC stage: each swing moves like a capacitor charging towards the new target.
-    const float alpha = dt / (kRcJitterSmoothSeconds + dt);
-    jitter_ += alpha * (target_ - jitter_);
-
-    // Rotate the stick instead of pushing it: its length (the aim speed) stays exactly the same.
-    const float sideways = -strength * kRcMaxJitter * jitter_;
+    const float amount = -strength;
+    // The same RC low-pass as the stabilizer (time based: the same at 250 or 1000 Hz)...
+    const float dt = std::clamp(dtSeconds, 0.0005f, 0.1f);
+    const float alpha = dt / (amount * kRcMaxTimeConstant + dt);
+    lowPass_.x += alpha * (out.x - lowPass_.x);
+    lowPass_.y += alpha * (out.y - lowPass_.y);
+    // ...flipped: what it would remove is added back, amplified.
+    const float gain = 1.0f + (kRcMaxAmplify - 1.0f) * amount;
+    const Vec2 boost{gain * (out.x - lowPass_.x), gain * (out.y - lowPass_.y)};
+    // Only the sideways part, as a turn of the stick: its length - the aim speed - stays exact.
+    const float sideways = (out.x * boost.y - out.y * boost.x) / length;
     const float angle = std::clamp(std::atan2(sideways, length), -kRcJitterMaxAngle, kRcJitterMaxAngle);
     const float c = std::cos(angle);
     const float s = std::sin(angle);
@@ -328,10 +319,7 @@ Vec2 RcFilter::jitter(Vec2 out, float strength, float dtSeconds, bool active) {
 
 void RcFilter::reset() {
     state_ = {};
-    jitter_ = 0.0f;
-    target_ = 0.0f;
-    side_ = 1.0f;
-    clock_ = 0.0f;
+    lowPass_ = {};
 }
 
 }  // namespace edgepad
