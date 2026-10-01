@@ -120,30 +120,33 @@ TEST_CASE("swap sticks") {
     CHECK(out.rx == doctest::Approx(1.0f));
 }
 
-TEST_CASE("RC jitter only acts while the stick is moved") {
+TEST_CASE("RC jitter only acts while the stick is moved and keeps the aim speed") {
     Config cfg = testConfig();
     StickSettings& right = cfg.active().rightStick;
     right.deadzone = 0.0f;       // worst case: no dead zone
     right.antiDeadzone = 0.2f;   // and an anti-dead zone that would amplify anything
     right.rcFilter = -1.0f;
     Pipeline p;
-    for (int i = 0; i < 8; ++i) {  // hands off the stick: perfectly still output
+    for (int i = 0; i < 8; ++i) {  // hands off the stick: nothing added
         InputState resting;
         resting.rx = (i % 2) ? 0.015f : -0.015f;  // resting sensor noise
         const OutputState out = p.process(resting, cfg, 0.004f);
         CHECK(std::fabs(out.rx) == doctest::Approx(processStick(0.015f, 0.0f, right).x));
         CHECK(out.ry == 0.0f);
     }
-    // Moving: a step in the stick overshoots (runs ahead), then settles on the real position.
-    InputState moved;
-    moved.rx = 0.4f;
-    p.process(moved, cfg, 0.004f);
-    moved.rx = 0.6f;
-    const float steady = processStick(0.6f, 0.0f, right).x;
-    CHECK(p.process(moved, cfg, 0.004f).rx > steady);
-    float settled = 0.0f;
-    for (int i = 0; i < 200; ++i) settled = p.process(moved, cfg, 0.004f).rx;
-    CHECK(settled == doctest::Approx(steady).epsilon(0.001));
+    // Aiming right: the stick length (aim speed) is untouched while the direction jitters.
+    InputState aiming;
+    aiming.rx = 0.6f;
+    const float speed = processStick(0.6f, 0.0f, right).x;
+    bool up = false, down = false;
+    for (int i = 0; i < 50; ++i) {
+        const OutputState out = p.process(aiming, cfg, 0.004f);
+        CHECK(std::hypot(out.rx, out.ry) == doctest::Approx(speed).epsilon(1e-4));
+        up |= out.ry > 0.0f;
+        down |= out.ry < 0.0f;
+    }
+    CHECK(up);
+    CHECK(down);
 }
 
 TEST_CASE("RC stabilizer smooths movement but lets go instantly") {

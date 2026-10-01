@@ -135,7 +135,7 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
         gyro_.reset();
     }
 
-    // Sticks: drift correction, RC filter, then dead zones / curves.
+    // Sticks: drift correction, RC stabilizer, dead zones / curves, RC jitter.
     const Vec2 leftRaw = recenterStick({in.lx, in.ly}, cfg.settings.leftStickCenter);
     const Vec2 rightRaw = recenterStick({in.rx, in.ry}, cfg.settings.rightStickCenter);
     const bool leftActive = stickActive(leftRaw.x, leftRaw.y, p.leftStick);
@@ -144,6 +144,8 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     const Vec2 right = rightFilter_.apply(rightRaw, p.rightStick.rcFilter, dtSeconds, rightActive);
     Vec2 leftOut = processStick(left.x, left.y, p.leftStick);
     Vec2 rightOut = processStick(right.x, right.y, p.rightStick);
+    leftOut = leftFilter_.jitter(leftOut, p.leftStick.rcFilter, dtSeconds, leftActive);
+    rightOut = rightFilter_.jitter(rightOut, p.rightStick.rcFilter, dtSeconds, rightActive);
     if (p.swapSticks) std::swap(leftOut, rightOut);
 
     // Gyro aiming adds to the right stick.

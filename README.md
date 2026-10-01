@@ -12,7 +12,7 @@ as a single portable executable, and updates itself from this repository's relea
 | --- | --- |
 | **Sticks** | Inner / outer dead zone, **anti-dead zone**, radial or axial dead zone, invert X/Y, swap sticks, one-click **drift calibration** |
 | **Response curves** | DualSense Edge presets (Default, Quick, Precise, Steady, Digital, Dynamic) with adjustable strength, plus a **Custom** curve you drag with the mouse |
-| **RC filter** | GameSir style, active only while you move the stick. Positive = *stabilizer* (RC low-pass that removes micro-jitter). Negative = *jitter*, the exact mirror of that low-pass, which amplifies micro-movements |
+| **RC filter** | GameSir style, active only while you move the stick. Positive = *stabilizer* (RC low-pass that removes micro-jitter). Negative = *jitter* that wobbles the aim direction while keeping your aim speed exactly the same |
 | **Triggers** | Dead zone, **trigger stop** (short trigger range), anti-dead zone, **rapid hair trigger** (full press the moment you pull, releases as soon as you ease off, fires again without letting go), **turbo** (1–100 ms between presses), adaptive-trigger **resistance wall** that makes the stop something you can feel |
 | **Gyro aiming** | Turn or tilt the controller to fine-aim on top of the right stick. Always on, while a button is held (e.g. L2 for aim down sights) or toggled. Sensitivity, vertical speed, yaw or roll, dead zone, smoothing for slow movements only, anti-dead zone, drift calibration |
 | **Buttons** | Map any button, including the Edge **back buttons**, to a controller button, full L2/R2 press, **keyboard key** or **mouse button**, or disable it. Per-button **toggle** and **turbo** with its own 1–100 ms interval |
@@ -78,10 +78,8 @@ the stick**, meaning while it's pushed past its dead zone (at least 3%). With yo
 nothing is added, even with a 0% dead zone or an anti-dead zone, and letting go stops instantly with no
 smoothing tail.
 
-Both sides are one RC stage on the raw stick, with a time constant of up to 40 ms at ±100. They mirror each other exactly around your real stick position:
-
-- **Positive values (stabilizer):** the output is the RC low-pass of the stick. It lags slightly behind your thumb, which removes micro-stutter so aim feels heavier and more consistent.
-- **Negative values (jitter):** the output is the stick plus the difference between the stick and its low-pass, i.e. `stick + (stick − lowpass)`. It runs ahead of your thumb by exactly as much as the stabilizer would lag, so every micro-movement and bit of stick noise gets amplified into jitter. Holding perfectly still adds nothing. Some games keep aim assist engaged with this. **Some online games treat it as aim-assist abuse, so check the rules of the game you play.**
+- **Positive values (stabilizer):** an RC low-pass on the raw stick, with a time constant of up to 40 ms. It lags slightly behind your thumb, which removes micro-stutter so aim feels heavier and more consistent.
+- **Negative values (jitter):** while you aim, the aim keeps swinging a tiny amount to alternating sides. A new swing starts every 5 ms, with a random size of 50–100% of the setting (up to 6% of stick travel). It moves through an RC stage, so it looks like an analog signal rather than a hard on/off switch. It only rotates the stick direction, so the stick length (your aim speed) stays exactly what your thumb is doing. It also averages out, so your aim never drifts. Some games keep aim assist engaged with this. **Some online games treat it as aim-assist abuse, so check the rules of the game you play.**
 
 The filter is time-based, so it feels the same at 250 Hz or 1000 Hz.
 

@@ -261,25 +261,64 @@ bool stickActive(float x, float y, const StickSettings& s) {
 
 Vec2 RcFilter::apply(Vec2 raw, float strength, float dtSeconds, bool active) {
     strength = clamp11(strength);
-    if (!active || strength == 0.0f) {
-        // Follow the stick exactly while it rests: letting go stops instantly, and the next
-        // movement is filtered starting from where the stick really is.
+    if (!active || strength <= 0.0f) {
+        // Follow the stick exactly while it rests (or with no stabilizer): letting go stops
+        // instantly, and the next movement is filtered starting from where the stick really is.
         state_ = raw;
         return raw;
     }
-    // One first order RC stage, alpha = dt / (RC + dt). Time based, so the feel does not
+    // First order RC low-pass: alpha = dt / (RC + dt). Time based, so the feel does not
     // change with the controller's polling rate.
     const float dt = std::clamp(dtSeconds, 0.0005f, 0.1f);
-    const float rc = std::fabs(strength) * kRcMaxTimeConstant;
+    const float rc = strength * kRcMaxTimeConstant;
     const float alpha = dt / (rc + dt);
     state_.x += alpha * (raw.x - state_.x);
     state_.y += alpha * (raw.y - state_.y);
-    if (strength > 0.0f) return state_;  // stabilizer: the low-pass itself, lags behind the thumb
-    // Jitter: the exact mirror of the low-pass. It runs ahead of the thumb by as much as the
-    // low-pass lags behind, which amplifies every micro-movement and bit of sensor noise.
-    return {clamp11(raw.x + (raw.x - state_.x)), clamp11(raw.y + (raw.y - state_.y))};
+    return state_;
 }
 
-void RcFilter::reset() { state_ = {}; }
+float RcFilter::random01() {
+    rng_ ^= rng_ << 13;
+    rng_ ^= rng_ >> 17;
+    rng_ ^= rng_ << 5;
+    return static_cast<float>(rng_ >> 8) / static_cast<float>(1u << 24);
+}
+
+Vec2 RcFilter::jitter(Vec2 out, float strength, float dtSeconds, bool active) {
+    strength = clamp11(strength);
+    const float length = std::hypot(out.x, out.y);
+    if (!active || strength >= 0.0f || length <= 1e-4f) {
+        jitter_ = 0.0f;
+        target_ = 0.0f;
+        clock_ = 0.0f;
+        return out;
+    }
+    const float dt = std::clamp(dtSeconds, 0.0f, 0.1f);
+    clock_ += dt;
+    if (target_ == 0.0f || clock_ >= kRcJitterStepSeconds) {
+        // Next swing: always to the other side (so it averages out), random size 50-100%.
+        clock_ = target_ == 0.0f ? 0.0f : std::fmod(clock_, kRcJitterStepSeconds);
+        side_ = -side_;
+        target_ = side_ * (0.5f + 0.5f * random01());
+    }
+    // RC stage: each swing moves like a capacitor charging towards the new target.
+    const float alpha = dt / (kRcJitterSmoothSeconds + dt);
+    jitter_ += alpha * (target_ - jitter_);
+
+    // Rotate the stick instead of pushing it: its length (the aim speed) stays exactly the same.
+    const float sideways = -strength * kRcMaxJitter * jitter_;
+    const float angle = std::clamp(std::atan2(sideways, length), -kRcJitterMaxAngle, kRcJitterMaxAngle);
+    const float c = std::cos(angle);
+    const float s = std::sin(angle);
+    return {out.x * c - out.y * s, out.x * s + out.y * c};
+}
+
+void RcFilter::reset() {
+    state_ = {};
+    jitter_ = 0.0f;
+    target_ = 0.0f;
+    side_ = 1.0f;
+    clock_ = 0.0f;
+}
 
 }  // namespace edgepad

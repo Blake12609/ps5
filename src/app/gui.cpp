@@ -700,11 +700,11 @@ private:
             "with your thumb off the stick nothing is added, and letting go stops instantly.\n\n"
             "Positive = stabilizer: an RC low-pass filter (time constant up to 40 ms) that lags slightly behind "
             "your thumb, removing micro-jitter so aim feels heavier and steadier.\n\n"
-            "Negative = jitter: the exact mirror of the stabilizer, 1:1. Instead of lagging behind your thumb "
-            "the stick runs ahead of it by the same amount, which amplifies every micro-movement and the "
-            "stick's own tiny noise into jitter - that keeps some games' aim assist engaged. Holding perfectly "
-            "still adds nothing. Some online games treat this as aim-assist abuse - check the rules of the game "
-            "you play.\n\nCtrl+click the slider to type an exact value.");
+            "Negative = jitter: while you aim, the aim keeps swinging a tiny bit to alternating sides (every 5 ms, "
+            "random size, RC-shaped like an analog signal). It only turns the stick direction - the stick length, "
+            "i.e. your aim speed, stays exactly what your thumb does, and it averages out so the aim never "
+            "drifts. This keeps some games' aim assist engaged. Some online games treat this as aim-assist abuse "
+            "- check the rules of the game you play.\n\nCtrl+click the slider to type an exact value.");
 
         changed_ |= enumCombo("Dead zone shape", s.shape, shapeLabel);
         changed_ |= ImGui::Checkbox("Invert X", &s.invertX);
