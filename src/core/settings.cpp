@@ -1,6 +1,7 @@
 #include "core/settings.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 
 namespace edgepad {
@@ -42,6 +43,27 @@ void normalizeTrigger(TriggerSettings& t) {
 }
 
 }  // namespace
+
+std::string normalizeGameName(std::string_view name) {
+    // Just the file name, lower case: "C:\\Games\\COD.exe" -> "cod.exe".
+    const size_t slash = name.find_last_of("/\\");
+    if (slash != std::string_view::npos) name.remove_prefix(slash + 1);
+    while (!name.empty() && std::isspace(static_cast<unsigned char>(name.front()))) name.remove_prefix(1);
+    while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) name.remove_suffix(1);
+    std::string out(name.substr(0, 128));
+    for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return out;
+}
+
+void normalizeGames(std::vector<std::string>& games) {
+    std::vector<std::string> clean;
+    for (const auto& g : games) {
+        std::string name = normalizeGameName(g);
+        if (!name.empty() && std::find(clean.begin(), clean.end(), name) == clean.end()) clean.push_back(std::move(name));
+        if (clean.size() >= kMaxGames) break;
+    }
+    games = std::move(clean);
+}
 
 Binding Binding::toButton(edgepad::Button b) {
     Binding x;
@@ -169,6 +191,11 @@ void Config::normalize() {
         if (p.touchpadZones >= TouchpadZones::Count) p.touchpadZones = TouchpadZones::Off;
         if (p.zoneTrigger >= ZoneTrigger::Count) p.zoneTrigger = ZoneTrigger::Click;
         normalizeGyro(p.gyro);
+        if (p.light.effect >= LightEffect::Count) p.light.effect = LightEffect::Static;
+        p.light.colorCount = std::clamp(p.light.colorCount, 2, 4);
+        p.light.periodSeconds = clampRange(p.light.periodSeconds, 0.5f, 30.0f);
+        p.light.brightness = clampRange(p.light.brightness, 0.05f, 1.0f);
+        normalizeGames(p.games);
         if (p.hotkey && std::find(kProfileHotkeys.begin(), kProfileHotkeys.end(), *p.hotkey) == kProfileHotkeys.end()) {
             p.hotkey.reset();
         }
@@ -189,6 +216,40 @@ const Profile& Config::active() const {
 Profile& Config::active() {
     const int i = std::clamp(settings.activeProfile, 0, static_cast<int>(profiles.size()) - 1);
     return profiles[static_cast<size_t>(i)];
+}
+
+std::optional<int> profileForGame(const Config& cfg, std::string_view game) {
+    const std::string name = normalizeGameName(game);
+    if (name.empty()) return std::nullopt;
+    for (size_t i = 0; i < cfg.profiles.size(); ++i) {
+        const auto& games = cfg.profiles[i].games;
+        if (std::find(games.begin(), games.end(), name) != games.end()) return static_cast<int>(i);
+    }
+    return std::nullopt;
+}
+
+std::string_view lightEffectId(LightEffect e) {
+    switch (e) {
+        case LightEffect::Breathing: return "breathing";
+        case LightEffect::Rainbow: return "rainbow";
+        case LightEffect::Cycle: return "cycle";
+        case LightEffect::Battery: return "battery";
+        case LightEffect::Static:
+        case LightEffect::Count: break;
+    }
+    return "static";
+}
+
+std::string_view lightEffectLabel(LightEffect e) {
+    switch (e) {
+        case LightEffect::Breathing: return "Breathing";
+        case LightEffect::Rainbow: return "Rainbow";
+        case LightEffect::Cycle: return "Color cycle";
+        case LightEffect::Battery: return "Battery level";
+        case LightEffect::Static:
+        case LightEffect::Count: break;
+    }
+    return "Static color";
 }
 
 std::string_view curveId(Curve c) {

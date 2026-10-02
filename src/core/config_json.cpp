@@ -1,7 +1,11 @@
 #include "core/config_json.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstring>
+
+#include "core/dualsense.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -33,6 +37,17 @@ template <>
 std::string_view enumId(GyroActivation v) { return gyroActivationId(v); }
 template <>
 std::string_view enumId(GyroAxis v) { return gyroAxisId(v); }
+template <>
+std::string_view enumId(LightEffect v) { return lightEffectId(v); }
+
+json rgb(const std::array<uint8_t, 3>& c) { return {c[0], c[1], c[2]}; }
+
+void readRgb(const json& j, std::array<uint8_t, 3>& out) {
+    if (!j.is_array() || j.size() != 3) return;
+    for (size_t i = 0; i < 3; ++i) {
+        if (j[i].is_number_integer()) out[i] = static_cast<uint8_t>(std::clamp(j[i].get<int>(), 0, 255));
+    }
+}
 
 template <typename Enum>
 void readEnum(const json& j, const char* key, Enum& out) {
@@ -271,6 +286,15 @@ json profileToJson(const Profile& p) {
         {"touchpad_zones", enumId(p.touchpadZones)},
         {"zone_trigger", enumId(p.zoneTrigger)},
         {"gyro", gyroToJson(p.gyro)},
+        {"light",
+         {
+             {"effect", enumId(p.light.effect)},
+             {"colors", {rgb(p.light.extraColors[0]), rgb(p.light.extraColors[1]), rgb(p.light.extraColors[2])}},
+             {"color_count", p.light.colorCount},
+             {"period", p.light.periodSeconds},
+             {"brightness", p.light.brightness},
+         }},
+        {"games", p.games},
     };
 }
 
@@ -284,9 +308,22 @@ Profile profileFromJson(const json& j) {
             p.hotkey = buttonFromId(it->get<std::string>());
         }
     }
-    if (auto it = j.find("lightbar"); it != j.end() && it->is_array() && it->size() == 3) {
-        for (size_t i = 0; i < 3; ++i) {
-            if ((*it)[i].is_number_integer()) p.lightbar[i] = static_cast<uint8_t>(std::clamp((*it)[i].get<int>(), 0, 255));
+    if (auto it = j.find("lightbar"); it != j.end()) readRgb(*it, p.lightbar);
+    if (const json* c = child(j, "light")) {
+        readEnum(*c, "effect", p.light.effect);
+        if (auto it = c->find("colors"); it != c->end() && it->is_array()) {
+            for (size_t i = 0; i < std::min<size_t>(it->size(), p.light.extraColors.size()); ++i) {
+                readRgb((*it)[i], p.light.extraColors[i]);
+            }
+        }
+        readInt(*c, "color_count", p.light.colorCount);
+        readFloat(*c, "period", p.light.periodSeconds);
+        readFloat(*c, "brightness", p.light.brightness);
+    }
+    if (auto it = j.find("games"); it != j.end() && it->is_array()) {
+        p.games.clear();
+        for (const auto& g : *it) {
+            if (g.is_string()) p.games.push_back(g.get<std::string>());
         }
     }
     readBool(j, "swap_sticks", p.swapSticks);
@@ -305,7 +342,111 @@ Profile profileFromJson(const json& j) {
     return p;
 }
 
+// What `value` changes compared to `base`: objects are compared key by key, anything else as a whole.
+json difference(const json& base, const json& value) {
+    if (!base.is_object() || !value.is_object()) return value;
+    json out = json::object();
+    for (const auto& [key, v] : value.items()) {
+        const auto it = base.find(key);
+        if (it == base.end()) {
+            out[key] = v;
+        } else if (*it != v) {
+            out[key] = (it->is_object() && v.is_object()) ? difference(*it, v) : v;
+        }
+    }
+    return out;
+}
+
+// `base` with `changes` laid over it (null values included, unlike a JSON merge patch).
+void overlay(json& base, const json& changes) {
+    for (const auto& [key, v] : changes.items()) {
+        if (v.is_object() && base.contains(key) && base[key].is_object()) {
+            overlay(base[key], v);
+        } else {
+            base[key] = v;
+        }
+    }
+}
+
+constexpr char kBase64Url[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+constexpr std::string_view kShareCodePrefix = "EP1-";
+
+std::string base64Url(const std::string& bytes) {
+    std::string out;
+    uint32_t buffer = 0;
+    int bits = 0;
+    for (unsigned char c : bytes) {
+        buffer = (buffer << 8) | c;
+        bits += 8;
+        while (bits >= 6) {
+            bits -= 6;
+            out.push_back(kBase64Url[(buffer >> bits) & 0x3F]);
+        }
+    }
+    if (bits > 0) out.push_back(kBase64Url[(buffer << (6 - bits)) & 0x3F]);
+    return out;
+}
+
+std::optional<std::string> fromBase64Url(std::string_view text) {
+    std::string out;
+    uint32_t buffer = 0;
+    int bits = 0;
+    for (char c : text) {
+        const char* at = std::strchr(kBase64Url, c);
+        if (c == '\0' || at == nullptr) return std::nullopt;
+        buffer = (buffer << 6) | static_cast<uint32_t>(at - kBase64Url);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<char>((buffer >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+
+uint32_t textCrc(const std::string& text) {
+    return dualsense::crc32(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+}
+
 }  // namespace
+
+std::string profileShareCode(const Profile& profile) {
+    const std::string text = difference(profileToJson(Profile{}), profileToJson(profile)).dump();
+    std::string bytes = text;
+    const uint32_t crc = textCrc(text);
+    for (int i = 0; i < 4; ++i) bytes.push_back(static_cast<char>((crc >> (8 * i)) & 0xFF));
+    return std::string(kShareCodePrefix) + base64Url(bytes);
+}
+
+std::optional<Profile> profileFromShareCode(std::string_view code, std::string* error) {
+    auto fail = [&](const char* why) -> std::optional<Profile> {
+        if (error) *error = why;
+        return std::nullopt;
+    };
+    std::string clean;
+    for (char c : code) {
+        if (!std::isspace(static_cast<unsigned char>(c))) clean.push_back(c);
+    }
+    if (clean.size() < kShareCodePrefix.size() ||
+        !std::equal(kShareCodePrefix.begin(), kShareCodePrefix.end(), clean.begin(),
+                    [](char a, char b) { return std::toupper(static_cast<unsigned char>(a)) == std::toupper(static_cast<unsigned char>(b)); })) {
+        return fail("not an EdgePad profile code (they start with EP1-)");
+    }
+    const auto bytes = fromBase64Url(std::string_view(clean).substr(kShareCodePrefix.size()));
+    if (!bytes || bytes->size() < 4) return fail("the code is incomplete or contains invalid characters");
+    const std::string text = bytes->substr(0, bytes->size() - 4);
+    uint32_t crc = 0;
+    for (int i = 0; i < 4; ++i) crc |= uint32_t{static_cast<uint8_t>((*bytes)[text.size() + static_cast<size_t>(i)])} << (8 * i);
+    if (crc != textCrc(text)) return fail("the code is damaged or incomplete (check that all of it was copied)");
+    const json changes = json::parse(text, nullptr, /*allow_exceptions=*/false);
+    if (!changes.is_object()) return fail("the code does not contain a profile");
+    json full = profileToJson(Profile{});
+    overlay(full, changes);
+    Config cfg;
+    cfg.profiles = {profileFromJson(full)};
+    cfg.normalize();
+    return cfg.profiles.front();
+}
 
 std::string configToJson(const Config& cfg) {
     json profiles = json::array();
@@ -320,6 +461,7 @@ std::string configToJson(const Config& cfg) {
              {"game_lightbar", cfg.settings.gameLightbar},
              {"auto_update", cfg.settings.autoUpdate},
              {"hide_controller", cfg.settings.hideController},
+             {"auto_profiles", cfg.settings.autoProfiles},
              {"enabled", cfg.settings.enabled},
              {"active_profile", cfg.settings.activeProfile},
              {"left_stick_center", floats(cfg.settings.leftStickCenter)},
@@ -346,6 +488,7 @@ Config configFromJson(const std::string& text, std::string* warning) {
         readBool(*s, "game_lightbar", cfg.settings.gameLightbar);
         readBool(*s, "auto_update", cfg.settings.autoUpdate);
         readBool(*s, "hide_controller", cfg.settings.hideController);
+        readBool(*s, "auto_profiles", cfg.settings.autoProfiles);
         readBool(*s, "enabled", cfg.settings.enabled);
         readInt(*s, "active_profile", cfg.settings.activeProfile);
         readFloats(*s, "left_stick_center", cfg.settings.leftStickCenter);

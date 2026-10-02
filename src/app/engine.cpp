@@ -1,15 +1,18 @@
 #include "app/engine.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <iterator>
 #include <memory>
 #include <optional>
 
+#include "core/auto_profile.hpp"
 #include "core/pipeline.hpp"
 #include "core/virtual_dualsense.hpp"
 #include "core/virtual_reports.hpp"
 #include "platform/controller_hide.hpp"
+#include "platform/foreground.hpp"
 #include "platform/hid_device.hpp"
 #include "platform/keyboard.hpp"
 #include "platform/paths.hpp"
@@ -53,11 +56,70 @@ void Engine::start() {
     if (thread_.joinable()) return;
     stop_ = false;
     thread_ = std::thread([this] { run(); });
+    watcher_ = std::thread([this] { watchForeground(); });
 }
 
 void Engine::stop() {
-    stop_ = true;
+    {
+        std::lock_guard lock(watcherMutex_);
+        stop_ = true;
+    }
+    watcherWake_.notify_all();
     if (thread_.joinable()) thread_.join();
+    if (watcher_.joinable()) watcher_.join();
+}
+
+void Engine::watchForeground() {
+    // Twice a second: asking which window is in front costs a few microseconds, and the program's
+    // name is only looked up again when another window comes to the front.
+    constexpr auto kInterval = std::chrono::milliseconds(500);
+    constexpr size_t kRecent = 10;
+    ForegroundWatcher watcher;
+    AutoProfile autoProfile;
+    std::vector<std::string> recent;
+    std::string lastApp;
+    Config cfg;
+    uint64_t cfgVersion = ~uint64_t{0};
+    while (!stop_) {
+        const ForegroundWatcher::App app = watcher.current();
+        const std::string name = app.self ? std::string{} : normalizeGameName(app.name);
+        if (!name.empty() && (recent.empty() || recent.front() != name)) {
+            if (auto it = std::find(recent.begin(), recent.end(), name); it != recent.end()) recent.erase(it);
+            recent.insert(recent.begin(), name);
+            if (recent.size() > kRecent) recent.pop_back();
+        }
+        {
+            std::lock_guard lock(mutex_);
+            // Copy the profiles only when they changed (every edit bumps configVersion_).
+            if (configVersion_ != cfgVersion) {
+                cfg = shared_;
+                cfgVersion = configVersion_;
+            }
+            cfg.settings.activeProfile = shared_.settings.activeProfile;
+        }
+        // While a switch is on its way to the controller loop, the active profile is not up to date.
+        if (autoProfileRequest_.load() < 0) {
+            if (const auto target = autoProfile.update(cfg, name)) autoProfileRequest_ = *target;
+        }
+        const bool supported = watcher.supported();
+        if (!name.empty() || app.self) lastApp = name;
+        {
+            std::lock_guard lock(mutex_);  // never held while waiting below: the controller loop needs it
+            if (status_.foregroundApp != lastApp || status_.foregroundKnown != supported ||
+                status_.recentApps != recent || status_.autoGame != autoProfile.game()) {
+                status_.foregroundKnown = supported;
+                status_.foregroundApp = lastApp;
+                status_.recentApps = recent;
+                status_.autoGame = autoProfile.game();
+            }
+        }
+        // Nothing to switch for (no profile lists a game): look less often, just for the recent list.
+        const bool anyGames = cfg.settings.autoProfiles &&
+                              std::any_of(cfg.profiles.begin(), cfg.profiles.end(),
+                                          [](const Profile& p) { return !p.games.empty(); });
+        std::unique_lock wait(watcherMutex_);
+        watcherWake_.wait_for(wait, anyGames ? kInterval : kInterval * 4, [this] { return stop_.load(); });
+    }
 }
 
 void Engine::updateConfig(const Config& config, uint64_t seenRevision) {
@@ -70,6 +132,7 @@ void Engine::updateConfig(const Config& config, uint64_t seenRevision) {
     }
     shared_.normalize();
     pendingConfig_ = true;
+    ++configVersion_;
 }
 
 Config Engine::config() const {
@@ -106,6 +169,26 @@ void Engine::run() {
     Clock::time_point nextEffectsWrite{};
     // Virtual DualSense: games drive parts of the real controller through it (dualsense::kPart*).
     uint8_t gameParts = 0;
+    tester::ReportStats reportStats;
+    Clock::time_point nextTimingStatus{};
+    int lastBattery = -1;  // for the battery lightbar effect
+    bool lastCharging = false;
+    const Clock::time_point effectsStart = Clock::now();
+    // Effects are only worked out again when something they depend on changed (not per report).
+    struct EffectsKey {
+        uint64_t config = 0;
+        int profile = 0;
+        bool enabled = false;
+        uint16_t rumble = 0;
+        uint32_t gameLightbar = 0;
+        int64_t frame = 0;
+        int battery = 0;
+        bool charging = false;
+        bool operator==(const EffectsKey&) const = default;
+    };
+    std::optional<EffectsKey> lastEffectsKey;
+    dualsense::Effects profileEffects;
+    uint64_t configGeneration = 0;  // increases whenever `cfg` is replaced
     bool featuresSent = false;  // the virtual DualSense has the controller's feature reports
     int lastProfile = -1;
     Clock::time_point nextPadStatus{};
@@ -185,9 +268,19 @@ void Engine::run() {
     while (!stop_) {
         {
             std::lock_guard lock(mutex_);
+            // A game came to the front (or left): its profile, like an Fn combo would switch it.
+            if (const int wanted = autoProfileRequest_.exchange(-1);
+                wanted >= 0 && wanted < static_cast<int>(shared_.profiles.size()) &&
+                wanted != shared_.settings.activeProfile) {
+                shared_.settings.activeProfile = wanted;
+                status_.activeProfile = wanted;
+                ++status_.revision;
+                pendingConfig_ = true;
+            }
             if (pendingConfig_) {
                 cfg = shared_;
                 pendingConfig_ = false;
+                ++configGeneration;
             }
         }
         const Clock::time_point now = Clock::now();
@@ -214,6 +307,7 @@ void Engine::run() {
                 for (const auto& info : enumerateControllers()) {
                     if (openController(info)) {
                         pipeline.reset();
+                        reportStats.reset();
                         featuresSent = false;
                         lastReport = Clock::now();
                         lastAttemptKind = OutputKind::Count;
@@ -225,7 +319,8 @@ void Engine::run() {
                 }
             }
             if (!device.isOpen()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                // No controller: look for one once a second, otherwise sleep.
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 continue;
             }
         }
@@ -309,6 +404,8 @@ void Engine::run() {
 
             PipelineEvents events;
             const OutputState output = pipeline.process(input, cfg, dt, &events);
+            lastBattery = input.battery;
+            lastCharging = input.charging;
 
             if (pad) {
                 // Sent with every controller report, changed or not: ViGEmBus drops an update that
@@ -331,6 +428,7 @@ void Engine::run() {
                     status_.padMessage = "Virtual controller was removed";
                 }
             }
+            reportStats.add(dt * 1000.0f, std::chrono::duration<float, std::micro>(Clock::now() - t).count());
             syncKeys(output.keys);
 
             ++reportsInWindow;
@@ -340,6 +438,12 @@ void Engine::run() {
                 status_.reportRate = static_cast<float>(reportsInWindow) / window;
                 reportsInWindow = 0;
                 rateWindowStart = t;
+            }
+            if (t >= nextTimingStatus) {
+                nextTimingStatus = t + std::chrono::milliseconds(100);
+                status_.timing = reportStats.summary();
+                status_.intervals = reportStats.history();
+                status_.intervalCount = reportStats.count();
             }
             if (events.profileChanged || events.enabledChanged) {
                 shared_.settings.activeProfile = cfg.settings.activeProfile;
@@ -359,13 +463,24 @@ void Engine::run() {
 
         // Lightbar, player LEDs, adaptive triggers and rumble back to the controller.
         const uint16_t rumble = pad ? rumble_.load() : 0;
-        std::optional<std::array<uint8_t, 3>> gameLightbar;
-        if (const uint32_t lb = gameLightbar_.load(); pad && padKind == OutputKind::DualShock4 && (lb & (1u << 24))) {
-            gameLightbar = std::array<uint8_t, 3>{static_cast<uint8_t>(lb >> 16), static_cast<uint8_t>(lb >> 8),
-                                                  static_cast<uint8_t>(lb)};
+        const uint32_t lb = pad && padKind == OutputKind::DualShock4 ? gameLightbar_.load() : 0;
+        // Lightbar animations step at 30 frames per second: smooth to the eye, few writes.
+        const bool animated = cfg.active().light.effect != LightEffect::Static;
+        const int64_t frame =
+            animated ? static_cast<int64_t>(std::chrono::duration<double>(Clock::now() - effectsStart).count() * 30.0) : 0;
+        const EffectsKey effectsKey{configGeneration, cfg.settings.activeProfile, cfg.settings.enabled, rumble, lb,
+                                    frame,           lastBattery,                 lastCharging};
+        if (effectsKey != lastEffectsKey) {
+            lastEffectsKey = effectsKey;
+            std::optional<std::array<uint8_t, 3>> gameLightbar;
+            if (lb & (1u << 24)) {
+                gameLightbar = std::array<uint8_t, 3>{static_cast<uint8_t>(lb >> 16), static_cast<uint8_t>(lb >> 8),
+                                                      static_cast<uint8_t>(lb)};
+            }
+            profileEffects = effectsForConfig(cfg, static_cast<uint8_t>(rumble >> 8), static_cast<uint8_t>(rumble & 0xFF),
+                                              gameLightbar, static_cast<double>(frame) / 30.0, lastBattery, lastCharging);
         }
-        dualsense::Effects effects =
-            effectsForConfig(cfg, static_cast<uint8_t>(rumble >> 8), static_cast<uint8_t>(rumble & 0xFF), gameLightbar);
+        dualsense::Effects effects = profileEffects;
         if (pad && padKind == OutputKind::DualSense) {
             // Games drive the real controller through the virtual DualSense, like on a PS5:
             // adaptive triggers, rumble, lightbar. A profile's trigger resistance and (unless games

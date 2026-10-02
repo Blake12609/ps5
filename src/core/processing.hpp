@@ -1,12 +1,19 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
 #include "core/types.hpp"
 
 namespace edgepad {
+
+// Length of a stick vector, inline (it runs several times per report): the same result as
+// std::hypot - computed in double precision and rounded once - without the library call.
+inline float vectorLength(float x, float y) {
+    return static_cast<float>(std::sqrt(static_cast<double>(x) * x + static_cast<double>(y) * y));
+}
 
 // Response curves modelled after the DualSense Edge stick presets.
 enum class Curve : uint8_t { Default, Quick, Precise, Steady, Digital, Dynamic, Custom, Count };
@@ -144,7 +151,7 @@ Vec2 processStick(float x, float y, const StickSettings& s);
 class Turbo {
 public:
     bool update(bool active, int intervalMs, float dtSeconds);
-    void reset();
+    void reset() { *this = Turbo{}; }
 
 private:
     bool running_ = false;

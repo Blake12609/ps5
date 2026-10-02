@@ -113,7 +113,7 @@ Vec2 processStick(float x, float y, const StickSettings& s) {
         return {axis(x), axis(y)};
     }
 
-    const float r = std::hypot(x, y);
+    const float r = vectorLength(x, y);
     if (r <= dz || r <= 0.0f) return {0.0f, 0.0f};
     // Past full throw (the stick's corners reach slightly beyond a radius of 1) the direction and
     // length are kept as they are, so diagonals are not pulled in: with no dead zone and the
@@ -155,12 +155,6 @@ bool Turbo::update(bool active, int intervalMs, float dtSeconds) {
         if (timer_ >= half) timer_ = 0.0f;  // never flip twice in one report
     }
     return on_;
-}
-
-void Turbo::reset() {
-    running_ = false;
-    on_ = false;
-    timer_ = 0.0f;
 }
 
 float TriggerProcessor::apply(float value, const TriggerSettings& s, float dtSeconds) {
@@ -249,13 +243,13 @@ Vec2 GyroAim::update(const MotionState& motion, const GyroSettings& s, const std
     const float alpha = dt / (0.040f + dt);
     smoothed_.x += alpha * (v.x - smoothed_.x);
     smoothed_.y += alpha * (v.y - smoothed_.y);
-    const float speed = std::hypot(v.x, v.y);
+    const float speed = vectorLength(v.x, v.y);
     const float threshold = std::clamp(s.smoothing, 0.0f, 1.0f) * 20.0f;
     const float direct = threshold <= 0.0f ? 1.0f : clamp01((speed - threshold * 0.5f) / (threshold * 0.5f));
     v.x = direct * v.x + (1.0f - direct) * smoothed_.x;
     v.y = direct * v.y + (1.0f - direct) * smoothed_.y;
 
-    const float magnitude = std::hypot(v.x, v.y);
+    const float magnitude = vectorLength(v.x, v.y);
     const float deadzone = std::max(0.0f, s.deadzone);
     if (magnitude <= deadzone) return {};
     // Stick deflection grows with rotation speed; full deflection at 360 / sensitivity deg/s.
@@ -272,7 +266,7 @@ void GyroAim::reset() {
 }
 
 bool stickActive(float x, float y, const StickSettings& s) {
-    return std::hypot(x, y) > std::max(clamp01(s.deadzone), kRcMinActiveDeflection);
+    return vectorLength(x, y) > std::max(clamp01(s.deadzone), kRcMinActiveDeflection);
 }
 
 Vec2 RcFilter::apply(Vec2 raw, float strength, float dtSeconds, bool active) {
@@ -295,7 +289,7 @@ Vec2 RcFilter::apply(Vec2 raw, float strength, float dtSeconds, bool active) {
 
 Vec2 RcFilter::amplify(Vec2 out, float strength, float dtSeconds, bool active) {
     strength = clamp11(strength);
-    const float length = std::hypot(out.x, out.y);
+    const float length = vectorLength(out.x, out.y);
     if (!active || strength >= 0.0f || length <= 1e-4f) {
         lowPass_ = out;  // follow the stick: the next movement starts from where it really is
         return out;

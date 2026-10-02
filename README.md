@@ -18,7 +18,11 @@ as a single portable executable, and updates itself from this repository's relea
 | **Buttons** | Map any button, including the Edge **back buttons**, to a controller button, full L2/R2 press, **keyboard key** or **mouse button**, or disable it. Per-button **toggle** and **turbo** with its own 1–100 ms interval |
 | **Shift layer** | Hold a shift button (e.g. a back button) and every button switches to a second set of bindings |
 | **Touchpad zones** | Split the touchpad into 2 or 4 extra buttons, fired on click or on touch, which is great on a regular DualSense |
-| **Profiles** | Up to 16 profiles. **Fn + Cross/Circle/Square/Triangle** switches profile from the controller, like the Edge. Lightbar colour and player LEDs show the active profile |
+| **Profiles** | Up to 16 profiles. **Fn + Cross/Circle/Square/Triangle** switches profile from the controller, like the Edge. Player LEDs show the active profile |
+| **Auto profile per game** | Add a game to a profile, and EdgePad switches to it while that game is in front, then back to your previous profile when you leave it. A profile picked by hand always wins. Pick the game from a list of recent programs. Works with Steam / Proton games on Linux too |
+| **Lightbar** | Per profile: a static colour, **breathing**, **rainbow**, **colour cycle** through 2–4 colours, or **battery level** (red to green, breathing while charging), with speed and brightness |
+| **Share codes** | Copy a profile as a short text code (`EP1-...`) to share or back up, and paste one to import it as a new profile. The code is checksummed, so a damaged code is rejected |
+| **Controller tester** | Stick circularity and coverage, resting noise (drift), trigger travel, and report rate, latency jitter and EdgePad's own processing time per report, measured live |
 | **Controller** | DualSense and DualSense Edge over USB or Bluetooth, battery level, game rumble forwarded back to the controller |
 | **Output** | A virtual **PS5 controller (DualSense)** with no ViGEmBus. Games get a genuine wired DualSense whose adaptive triggers, rumble and lightbar reach your real controller. Or a virtual **Xbox 360** / **PlayStation 4 (DualShock 4)** controller via ViGEmBus. On Linux: UHID / uinput |
 | **Hide controller** | **Hide the real controller from games** so they only see the virtual one: no double input. Uses HidHide when it's installed (EdgePad sets it up and undoes it by itself), otherwise exclusive access. On Linux it grabs the controller's input devices |
@@ -29,15 +33,25 @@ A regular DualSense works too. It has no back buttons, so the **Mute** button ac
 
 ### Performance
 
+EdgePad is built to stay out of the way while you play:
+
 - Controller input runs on its own thread, driven by the controller's HID reports (no polling sleeps).
-- A report is turned into virtual controller output in microseconds.
+- A report is turned into virtual controller output in well under a microsecond (about 0.3 µs on a
+  desktop CPU), so even a 1000 Hz USB controller costs a few hundredths of a percent of one core.
+  Only buttons that are held, toggled on or firing turbo are looked at. Lightbar, LED and trigger
+  effects are worked out again only when something they depend on changes.
+- With the window closed (`--headless`) EdgePad uses about 5 MB of memory and no measurable CPU.
+- Finding out which game is in front for automatic profiles takes a few microseconds, twice a second.
+  When no profile has a game, it checks four times less often.
 - Every controller report goes straight to the virtual controller. ViGEmBus silently drops an update
   when the game side has no read waiting, so EdgePad never relies on a single update getting through.
   The next report (1–4 ms later) always carries the current state.
 - Lightbar, LED, adaptive-trigger and rumble writes are capped at one per 10 ms. These writes can block for a
   few ms, especially over Bluetooth, and fast-changing game rumble could otherwise hold up input.
 - On Windows the input thread runs at high priority, so a busy game can't delay a controller report.
-- The UI renders at full rate only while focused; in the background it drops to about 15 fps, and it stops rendering while minimized.
+- The UI renders at no more than 60 fps, even on 144 / 240 Hz screens, and only while focused. In the
+  background it drops to 10 fps, and while minimized it draws nothing at all. **Minimize EdgePad while
+  you play** and the window costs nothing.
 
 ## Getting started (Windows)
 
@@ -173,6 +187,43 @@ The filter is time-based, so it feels the same at 250 Hz or 1000 Hz.
 
 The gyro adds to the right stick, so the stick still handles big turns.
 
+## Automatic profiles per game
+
+In the **Profile** tab, under **Games**, add the games that should use this profile. Type the program's
+file name (`cod.exe`) or pick it from **Add a recent program**: start the game, switch back to
+EdgePad, and it's in the list.
+
+- While one of the profile's games is in front, its profile is on. The header shows **Auto: cod.exe**.
+- When you switch to another program, the profile you had before comes back.
+- A profile picked by hand (in EdgePad or with Fn) wins: EdgePad doesn't switch it back. The next time
+  you come to the game, its profile is switched on again.
+- A game can belong to one profile only. Adding it to another profile moves it.
+- EdgePad's own window never counts, so you can tweak the game's profile while the game runs.
+- On Linux this uses X11's active window, which includes XWayland and Wine / Proton games (matched by
+  their `.exe` name). A pure Wayland desktop doesn't say which window is active.
+
+## Lightbar effects and share codes
+
+The **Profile** tab also sets the lightbar effect. Choose a static colour, breathing, rainbow, a colour
+cycle through 2–4 of your colours, or the battery level. Speed and brightness are adjustable. If games
+may set the lightbar (Settings), a game that colours it takes over.
+
+**Copy share code** puts the profile on the clipboard as a short `EP1-...` code. Only what differs from
+a new profile is included. **Import as new profile** adds a pasted code as a new profile and never
+overwrites one. Spaces and line breaks in a pasted code are fine. A code that is cut off or changed
+is rejected.
+
+## Controller tester
+
+The **Tester** tab measures the controller itself, before any EdgePad processing:
+
+- **Sticks:** rotate each stick slowly around its edge. The outline shows how round the stick's range
+  is (circularity error) and how much of it was reached. Leave the stick alone to see its resting
+  noise. More than about 2% suggests drift; use **Calibrate** in the Sticks tab.
+- **Triggers:** the travel actually reached, from fully released to fully pressed.
+- **Polling:** the report rate (about 1000 Hz over USB, about 250 Hz over Bluetooth), the time between
+  reports with its jitter, and EdgePad's own processing time per report.
+
 ## Keyboard / mouse binds, toggle and turbo
 
 Every button in the **Buttons** tab can send a controller button, a keyboard key or a mouse button:
@@ -230,11 +281,11 @@ Try the UI without a controller with `EdgePad --demo`, which simulates one.
 ```
 src/core/       platform independent: stick/trigger processing, RC filter, remapping pipeline,
                 DualSense HID protocol, virtual DualSense (descriptors, reports, USB/IP protocol),
-                virtual controller reports and motion calibration, config JSON, versions, SHA-256
-                (unit tested)
+                virtual controller reports and motion calibration, lightbar effects, automatic
+                profiles, share codes, controller tester, config JSON, versions, SHA-256 (unit tested)
 src/platform/   hidapi / exclusive HID device, controller hiding (HidHide, input grab), virtual controllers
-                (USB/IP server + usbip-win2 or UHID for the DualSense, ViGEmBus, uinput), WinHTTP / curl,
-                portable paths, self-update
+                (USB/IP server + usbip-win2 or UHID for the DualSense, ViGEmBus, uinput), foreground
+                window (Win32 / X11), WinHTTP / curl, portable paths, self-update
 src/app/        engine thread, updater, config store, Dear ImGui interface, main
 tests/          doctest unit tests
 ```

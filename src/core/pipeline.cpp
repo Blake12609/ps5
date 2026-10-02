@@ -1,6 +1,7 @@
 #include "core/pipeline.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <utility>
 
@@ -12,7 +13,7 @@ namespace {
 constexpr ButtonMask kComboMask =
     bit(Button::Cross) | bit(Button::Circle) | bit(Button::Square) | bit(Button::Triangle) | bit(Button::Options);
 
-ButtonMask passthroughMask() {
+constexpr ButtonMask passthroughMask() {
     ButtonMask mask = 0;
     for (int i = 0; i < kButtonCount; ++i) {
         const Button b = buttonAt(i);
@@ -20,6 +21,16 @@ ButtonMask passthroughMask() {
     }
     return mask;
 }
+constexpr ButtonMask kPassthroughMask = passthroughMask();
+
+constexpr ButtonMask remapSourceMask() {
+    ButtonMask mask = 0;
+    for (int i = 0; i < kButtonCount; ++i) {
+        if (isRemapSource(buttonAt(i))) mask |= bit(buttonAt(i));
+    }
+    return mask;
+}
+constexpr ButtonMask kRemapSourceMask = remapSourceMask();
 
 // Digital L2 / R2 (a DualShock 4 report carries them next to the analog value): the controller's
 // own bit while the trigger reaches the game unchanged (1:1 settings), otherwise "pressed at all",
@@ -72,11 +83,64 @@ Button touchpadZoneAt(const TouchPoint& touch, TouchpadZones zones) {
     return left ? Button::TouchBottomLeft : Button::TouchBottomRight;
 }
 
+std::array<uint8_t, 3> lightbarColor(const Profile& p, double seconds, int battery, bool charging) {
+    const LightbarSettings& l = p.light;
+    const double period = std::clamp(static_cast<double>(l.periodSeconds), 0.5, 30.0);
+    const float phase = static_cast<float>(std::fmod(std::max(seconds, 0.0) / period, 1.0));  // 0..1 through one cycle
+    auto mix = [](const std::array<uint8_t, 3>& a, const std::array<uint8_t, 3>& b, float t) {
+        std::array<float, 3> c{};
+        for (size_t i = 0; i < 3; ++i) c[i] = static_cast<float>(a[i]) + (static_cast<float>(b[i]) - a[i]) * t;
+        return c;
+    };
+    std::array<float, 3> color{static_cast<float>(p.lightbar[0]), static_cast<float>(p.lightbar[1]),
+                               static_cast<float>(p.lightbar[2])};
+    float level = 1.0f;
+    switch (l.effect) {
+        case LightEffect::Breathing:  // smooth in and out, never fully dark
+            level = 0.08f + 0.92f * (0.5f - 0.5f * std::cos(6.2831853f * phase));
+            break;
+        case LightEffect::Rainbow: {  // around the color wheel
+            const float h = phase * 6.0f;
+            const float x = 1.0f - std::fabs(std::fmod(h, 2.0f) - 1.0f);
+            const int sector = static_cast<int>(h) % 6;
+            const std::array<std::array<float, 3>, 6> rgb{{{1, x, 0}, {x, 1, 0}, {0, 1, x}, {0, x, 1}, {x, 0, 1}, {1, 0, x}}};
+            for (size_t i = 0; i < 3; ++i) color[i] = 255.0f * rgb[static_cast<size_t>(sector)][i];
+            break;
+        }
+        case LightEffect::Cycle: {  // fade from color to color, the profile color first
+            const int count = std::clamp(l.colorCount, 2, 4);
+            std::array<std::array<uint8_t, 3>, 4> colors{p.lightbar, l.extraColors[0], l.extraColors[1], l.extraColors[2]};
+            const float pos = phase * static_cast<float>(count);
+            const int from = std::min(static_cast<int>(pos), count - 1);
+            const float t = pos - static_cast<float>(from);
+            const float smooth = t * t * (3.0f - 2.0f * t);
+            color = mix(colors[static_cast<size_t>(from)], colors[static_cast<size_t>((from + 1) % count)], smooth);
+            break;
+        }
+        case LightEffect::Battery: {  // red when empty, yellow at half, green when full; breathes while charging
+            if (battery >= 0) {
+                const float b = std::clamp(static_cast<float>(battery) / 100.0f, 0.0f, 1.0f);
+                color = b < 0.5f ? mix({255, 0, 0}, {255, 200, 0}, b * 2.0f) : mix({255, 200, 0}, {0, 255, 40}, (b - 0.5f) * 2.0f);
+                if (charging) level = 0.35f + 0.65f * (0.5f - 0.5f * std::cos(6.2831853f * phase));
+            }
+            break;
+        }
+        case LightEffect::Static:
+        case LightEffect::Count:
+            break;
+    }
+    const float scale = level * std::clamp(l.brightness, 0.05f, 1.0f);
+    std::array<uint8_t, 3> out{};
+    for (size_t i = 0; i < 3; ++i) out[i] = static_cast<uint8_t>(std::clamp(color[i] * scale, 0.0f, 255.0f) + 0.5f);
+    return out;
+}
+
 dualsense::Effects effectsForConfig(const Config& cfg, uint8_t rumbleLarge, uint8_t rumbleSmall,
-                                    const std::optional<std::array<uint8_t, 3>>& gameLightbar) {
+                                    const std::optional<std::array<uint8_t, 3>>& gameLightbar, double seconds,
+                                    int battery, bool charging) {
     dualsense::Effects fx;
     const Profile& p = cfg.active();
-    fx.lightbar = (cfg.settings.gameLightbar && gameLightbar) ? *gameLightbar : p.lightbar;
+    fx.lightbar = (cfg.settings.gameLightbar && gameLightbar) ? *gameLightbar : lightbarColor(p, seconds, battery, charging);
     if (cfg.settings.enabled) {
         fx.playerLeds = playerLedsForProfile(cfg.settings.activeProfile);
         fx.leftTrigger = dualsense::triggerEffectFor(p.l2);
@@ -135,7 +199,7 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
         out.ry = in.ry;
         out.l2 = in.l2;
         out.r2 = in.r2;
-        out.buttons = (usable & passthroughMask()) | (in.buttons & (bit(Button::L2) | bit(Button::R2)));
+        out.buttons = (usable & kPassthroughMask) | (in.buttons & (bit(Button::L2) | bit(Button::R2)));
         return out;
     }
 
@@ -165,12 +229,12 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     if (gyro.x != 0.0f || gyro.y != 0.0f) {
         // Never longer than full deflection, or than the stick alone (whose corners may reach a
         // bit further): without gyro movement the stick stays exactly as it is.
-        const float limit = std::max(1.0f, std::hypot(rightOut.x, rightOut.y));
+        const float limit = std::max(1.0f, vectorLength(rightOut.x, rightOut.y));
         rightOut.x += gyro.x;
         rightOut.y += gyro.y;
-        if (const float length = std::hypot(rightOut.x, rightOut.y); length > limit) {
-            rightOut.x *= limit / length;
-            rightOut.y *= limit / length;
+        if (const float len = vectorLength(rightOut.x, rightOut.y); len > limit) {
+            rightOut.x *= limit / len;
+            rightOut.y *= limit / len;
         }
     }
     out.lx = leftOut.x;
@@ -205,9 +269,12 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     shiftLatched_ = (shiftLatched_ & sources) | (shiftHeld ? newSources : 0);
     prevSources_ = sources;
 
-    for (int i = 0; i < kButtonCount; ++i) {
+    // Only buttons that are held, toggled on or firing turbo can produce anything or have state to
+    // clear: every other button is skipped (usually all but a few).
+    for (ButtonMask visit = (sources | toggled_ | turboRunning_) & kRemapSourceMask; visit != 0; visit &= visit - 1) {
+        const int i = std::countr_zero(visit);
         const Button src = buttonAt(i);
-        if (!isRemapSource(src)) continue;
+        const ButtonMask m = bit(src);
         const size_t k = static_cast<size_t>(i);
         const bool held = has(sources, src);
         const Binding& shifted = p.shiftButtons[k];
@@ -216,15 +283,17 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
 
         bool active = held;
         if (b.toggle) {
-            if (has(newSources, src)) toggled_[k] = !toggled_[k];
-            active = toggled_[k];
+            if (has(newSources, src)) toggled_ ^= m;
+            active = has(toggled_, src);
         } else {
-            toggled_[k] = false;
+            toggled_ &= ~m;
         }
         if (b.turbo) {
+            turboRunning_ = active ? (turboRunning_ | m) : (turboRunning_ & ~m);
             active = turbo_[k].update(active, b.turboIntervalMs, dtSeconds);
         } else {
             turbo_[k].reset();
+            turboRunning_ &= ~m;
         }
         if (active) emit(b, out);
     }
@@ -235,7 +304,8 @@ void Pipeline::resetLayers() {
     prevSources_ = 0;
     shiftLatched_ = 0;
     zoneLatched_.reset();
-    toggled_.fill(false);
+    toggled_ = 0;
+    turboRunning_ = 0;
     for (auto& t : turbo_) t.reset();
 }
 

@@ -62,10 +62,27 @@ using BindingMap = std::array<Binding, kButtonCount>;
 BindingMap defaultButtonMap();
 BindingMap defaultShiftMap();  // everything "same as normal"
 
+// Lightbar (the lights around the touchpad) animation of a profile.
+enum class LightEffect : uint8_t { Static, Breathing, Rainbow, Cycle, Battery, Count };
+
+struct LightbarSettings {
+    LightEffect effect = LightEffect::Static;
+    // Colors after the profile color for the Cycle effect (the profile color is the first).
+    std::array<std::array<uint8_t, 3>, 3> extraColors{{{255, 0, 120}, {0, 255, 140}, {255, 190, 0}}};
+    int colorCount = 3;          // colors in the cycle, 2..4
+    float periodSeconds = 4.0f;  // one breath / one trip around the rainbow / one cycle, 0.5..30 s
+    float brightness = 1.0f;     // 0.05..1
+
+    bool operator==(const LightbarSettings&) const = default;
+};
+
 struct Profile {
     std::string name = "Default";
     std::optional<Button> hotkey = Button::Cross;  // Fn + hotkey activates this profile
     std::array<uint8_t, 3> lightbar{0, 90, 255};
+    LightbarSettings light;
+    // Games (executable file names, e.g. "cod.exe") that switch to this profile automatically.
+    std::vector<std::string> games;
     StickSettings leftStick;
     StickSettings rightStick;
     TriggerSettings l2;
@@ -90,6 +107,8 @@ struct Settings {
     // Hide the real controller from games (HidHide or exclusive access on Windows, an input grab on
     // Linux) so they only see EdgePad's virtual controller: no double input.
     bool hideController = false;
+    // Switch to a profile while one of its games is in front (Profile::games).
+    bool autoProfiles = true;
     bool enabled = true;     // false = raw passthrough (Fn + Options toggles)
     int activeProfile = 0;
     // Calibration of this controller (resting offsets).
@@ -119,6 +138,16 @@ struct Config {
 inline constexpr std::array<Button, 4> kProfileHotkeys{Button::Cross, Button::Circle, Button::Square,
                                                        Button::Triangle};
 
+inline constexpr size_t kMaxGames = 32;  // per profile
+
+// A game's executable as profiles store it: the file name, lower case ("C:\Games\COD.exe" -> "cod.exe").
+std::string normalizeGameName(std::string_view name);
+void normalizeGames(std::vector<std::string>& games);
+// The profile with `game` in its list, if any.
+std::optional<int> profileForGame(const Config& cfg, std::string_view game);
+
+std::string_view lightEffectId(LightEffect e);
+std::string_view lightEffectLabel(LightEffect e);
 std::string_view curveId(Curve c);
 std::string_view curveLabel(Curve c);
 std::string_view outputKindId(OutputKind k);

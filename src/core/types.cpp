@@ -61,28 +61,4 @@ std::optional<Button> buttonFromId(std::string_view id) {
     return std::nullopt;
 }
 
-bool isPhysicalButton(Button b) { return b < Button::TouchLeft; }
-
-bool isRemapSource(Button b) { return b != Button::L2 && b != Button::R2 && b != Button::Count; }
-
-bool isRemapTarget(Button b) {
-    switch (b) {
-        // Mute is a target: a virtual DualSense has one (Xbox / DualShock 4 output have no Mute).
-        case Button::PaddleLeft:
-        case Button::PaddleRight:
-        case Button::FnLeft:
-        case Button::FnRight:
-        case Button::TouchLeft:
-        case Button::TouchRight:
-        case Button::TouchTopLeft:
-        case Button::TouchTopRight:
-        case Button::TouchBottomLeft:
-        case Button::TouchBottomRight:
-        case Button::Count:
-            return false;
-        default:
-            return true;
-    }
-}
-
 }  // namespace edgepad

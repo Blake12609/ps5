@@ -9,13 +9,17 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <initializer_list>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/build_info.hpp"
+#include "core/axis.hpp"
+#include "core/config_json.hpp"
 #include "core/pipeline.hpp"
 #include "core/processing.hpp"
 #include "platform/paths.hpp"
@@ -357,6 +361,11 @@ public:
 
     bool restartRequested() const { return restartRequested_; }
 
+    // While minimized (no frames drawn): still save a pending edit.
+    void idle(double now) {
+        if (dirty_ && now - lastEdit_ > 0.75) save();
+    }
+
     void frame(double now) {
         now_ = now;
         status_ = engine_.status();
@@ -396,6 +405,14 @@ public:
             }
             if (ImGui::BeginTabItem("Gyro")) {
                 drawGyroTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Profile")) {
+                drawProfileTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Tester")) {
+                drawTesterTab();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Settings")) {
@@ -525,7 +542,11 @@ private:
         ImGui::BeginDisabled(cfg_.profiles.size() >= kMaxProfiles);
         if (ImGui::Button("New")) addProfile(Profile{}, "Profile " + std::to_string(cfg_.profiles.size() + 1));
         ImGui::SameLine();
-        if (ImGui::Button("Duplicate")) addProfile(profile(), profile().name + " copy");
+        if (ImGui::Button("Duplicate")) {
+            Profile copy = profile();
+            copy.games.clear();  // its games keep switching to the original
+            addProfile(copy, profile().name + " copy");
+        }
         ImGui::EndDisabled();
         ImGui::SameLine();
         if (ImGui::Button("Rename")) {
@@ -571,6 +592,12 @@ private:
         if (ImGui::ColorEdit3("##lightbar", color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
             for (size_t i = 0; i < 3; ++i) lb[i] = static_cast<uint8_t>(std::lround(clamp01(color[i]) * 255.0f));
             changed_ = true;
+        }
+        if (!status_.autoGame.empty()) {
+            ImGui::SameLine(0.0f, 24.0f);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kGood), "Auto: %s", status_.autoGame.c_str());
+            ImGui::SetItemTooltip("Switched to this profile because %s is in front (Profile tab)", status_.autoGame.c_str());
         }
 
         if (ImGui::BeginPopupModal("Rename profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -1222,6 +1249,306 @@ private:
     }
 
     // -- settings -------------------------------------------------------------
+    // -- controller tester ------------------------------------------------------------
+    void drawCircularity(const char* id, float size, const tester::StickTest& test, float x, float y) {
+        ImGui::InvisibleButton(id, ImVec2(size, size));
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 p0 = ImGui::GetItemRectMin();
+        const ImVec2 c = p0 + ImVec2(size * 0.5f, size * 0.5f);
+        const float r = size * 0.42f;
+        dl->AddRectFilled(p0, p0 + ImVec2(size, size), kWell, 10.0f);
+        dl->AddCircleFilled(c, r, kPanel, 96);
+        dl->AddLine(c - ImVec2(r, 0), c + ImVec2(r, 0), kGrid);
+        dl->AddLine(c - ImVec2(0, r), c + ImVec2(0, r), kGrid);
+        dl->AddCircle(c, r, IM_COL32(70, 78, 96, 255), 96, 1.5f);  // a perfect circle
+        const auto& outline = test.outline();
+        auto point = [&](int sector) {
+            const float a = (static_cast<float>(sector) + 0.5f) / tester::StickTest::kSectors * 6.2831853f;
+            const float len = outline[static_cast<size_t>(sector)] * r;
+            return c + ImVec2(std::cos(a) * len, -std::sin(a) * len);
+        };
+        for (int i = 0; i < tester::StickTest::kSectors; ++i) {
+            const int j = (i + 1) % tester::StickTest::kSectors;
+            if (outline[static_cast<size_t>(i)] > 0.0f && outline[static_cast<size_t>(j)] > 0.0f) {
+                dl->AddLine(point(i), point(j), kAccent, 2.0f);
+            } else if (outline[static_cast<size_t>(i)] > 0.0f) {
+                dl->AddCircleFilled(point(i), 2.0f, kAccent);
+            }
+        }
+        dl->AddCircleFilled(c + ImVec2(clamp11(x) * r, -clamp11(y) * r), size * 0.03f, kRaw, 16);
+    }
+
+    void drawStickTest(const char* title, tester::StickTest& test, float x, float y) {
+        ImGui::PushID(title);
+        ImGui::SeparatorText(title);
+        const float size = std::min(ImGui::GetFontSize() * 13.0f, ImGui::GetContentRegionAvail().x * 0.5f);
+        drawCircularity("circle", size, test, x, y);
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        ImGui::Text("Now: X %d  Y %d  (centre 128)", stickToRaw(x), stickToRaw(-y));
+        if (test.coverage() < 1.0f) {
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kMuted), "Edge covered: %.0f%% - rotate slowly along the edge",
+                               test.coverage() * 100.0f);
+        } else {
+            ImGui::TextUnformatted("Edge covered: 100%");
+        }
+        if (test.coverage() > 0.0f) {
+            const float error = test.averageError() * 100.0f;
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(error < 8.0f ? kGood : kWarn), "Circularity error: %.1f%%",
+                               error);
+            helpMarker("How far the edge is from a perfect circle, on average. A healthy DualSense is usually a few "
+                       "percent (its corners reach a little further). Large values: a worn or damaged stick.");
+        }
+        if (test.restSeen()) {
+            const int rx = static_cast<int>(std::lround(test.restRangeX() * 127.5f));
+            const int ry = static_cast<int>(std::lround(test.restRangeY() * 127.5f));
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(std::max(rx, ry) <= 3 ? kGood : kWarn),
+                               "Resting noise: %d / %d steps", rx, ry);
+            helpMarker("How much the stick wanders while you leave it alone (X / Y, in sensor steps). 0-3 is normal. "
+                       "Calibrate sticks (Sticks tab) fixes an off-centre rest position; a lot of noise needs a "
+                       "small dead zone.");
+        }
+        ImGui::EndGroup();
+        ImGui::PopID();
+    }
+
+    void drawTriggerTest(const char* name, const tester::TriggerTest& test, float value) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("%s", name);
+        ImGui::SameLine(ImGui::GetFontSize() * 3.0f);
+        char overlay[64];
+        std::snprintf(overlay, sizeof(overlay), "%d", static_cast<int>(triggerToRaw(value)));
+        ImGui::ProgressBar(value, ImVec2(ImGui::GetFontSize() * 16.0f, 0.0f), overlay);
+        ImGui::SameLine();
+        if (!test.seen()) return;
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(test.fullRange() ? kGood : kMuted), "reached %d - %d%s",
+                           static_cast<int>(triggerToRaw(test.min())), static_cast<int>(triggerToRaw(test.max())),
+                           test.fullRange() ? "  (full range)" : "  - press all the way");
+    }
+
+    void drawTesterTab() {
+        const InputState& in = status_.input;
+        if (status_.connected) {
+            leftTest_.add(in.lx, in.ly);
+            rightTest_.add(in.rx, in.ry);
+            l2Test_.add(in.l2);
+            r2Test_.add(in.r2);
+        }
+        ImGui::TextDisabled("Raw controller values, before any EdgePad setting.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset")) {
+            leftTest_.reset();
+            rightTest_.reset();
+            l2Test_.reset();
+            r2Test_.reset();
+        }
+        if (ImGui::BeginTable("stick tests", 2, ImGuiTableFlags_SizingStretchSame)) {
+            ImGui::TableNextColumn();
+            drawStickTest("Left stick", leftTest_, in.lx, in.ly);
+            ImGui::TableNextColumn();
+            drawStickTest("Right stick", rightTest_, in.rx, in.ry);
+            ImGui::EndTable();
+        }
+        ImGui::SeparatorText("Triggers");
+        drawTriggerTest("L2", l2Test_, in.l2);
+        drawTriggerTest("R2", r2Test_, in.r2);
+
+        ImGui::SeparatorText("Polling and latency");
+        const auto& t = status_.timing;
+        if (!status_.connected || t.samples == 0) {
+            ImGui::TextDisabled("Connect a controller to measure.");
+            return;
+        }
+        ImGui::Text("Report rate: %.0f Hz   interval %.2f ms (min %.2f, max %.2f, jitter %.2f ms)", t.rateHz,
+                    t.averageMs, t.minMs, t.maxMs, t.jitterMs);
+        helpMarker("How often the controller sends its state. A wired DualSense sends about every 4 ms (250 Hz); "
+                   "Bluetooth is similar but less even. Last 256 reports.");
+        ImGui::Text("EdgePad processing: %.0f us average, %.0f us at most", t.processingAverageUs, t.processingMaxUs);
+        helpMarker("Time from receiving a report to handing it to the virtual controller - EdgePad's own added "
+                   "delay (1000 us = 1 ms).");
+        const size_t n = std::min(status_.intervalCount, status_.intervals.size());
+        if (n > 1) {
+            const float* data = status_.intervals.data() + (status_.intervals.size() - n);
+            const float top = std::max(t.maxMs * 1.2f, 1.0f);
+            ImGui::PlotLines("##intervals", data, static_cast<int>(n), 0, "time between reports (ms)", 0.0f, top,
+                             ImVec2(ImGui::GetContentRegionAvail().x, ImGui::GetFontSize() * 5.0f));
+        }
+    }
+
+    // -- profile: lightbar, automatic switching, sharing ---------------------------
+    bool colorEdit(const char* label, std::array<uint8_t, 3>& c) {
+        float f[3] = {c[0] / 255.0f, c[1] / 255.0f, c[2] / 255.0f};
+        if (!ImGui::ColorEdit3(label, f, ImGuiColorEditFlags_NoInputs)) return false;
+        for (size_t i = 0; i < 3; ++i) c[i] = static_cast<uint8_t>(std::lround(clamp01(f[i]) * 255.0f));
+        return true;
+    }
+
+    void drawLightbarSection(Profile& p) {
+        LightbarSettings& l = p.light;
+        const auto now = lightbarColor(p, ImGui::GetTime(), status_.battery, status_.charging);
+        const float h = ImGui::GetFrameHeight();
+        ImGui::ColorButton("##preview", ImVec4(now[0] / 255.0f, now[1] / 255.0f, now[2] / 255.0f, 1.0f),
+                           ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop, ImVec2(h * 4.0f, h));
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("live preview - the lights around the touchpad");
+        changed_ |= enumCombo("Effect", l.effect, lightEffectLabel);
+        helpMarker("Static: the profile color. Breathing: fades in and out. Rainbow: goes around the color wheel. "
+                   "Color cycle: fades through up to 4 colors of your choice. Battery level: red when empty, "
+                   "yellow at half, green when full, breathing while charging.");
+        if (l.effect != LightEffect::Rainbow && l.effect != LightEffect::Battery) {
+            changed_ |= colorEdit(l.effect == LightEffect::Cycle ? "Color 1" : "Color", p.lightbar);
+        }
+        if (l.effect == LightEffect::Cycle) {
+            for (int i = 0; i + 1 < l.colorCount; ++i) {
+                ImGui::SameLine();
+                const std::string label = "##color" + std::to_string(i + 2);
+                changed_ |= colorEdit(label.c_str(), l.extraColors[static_cast<size_t>(i)]);
+            }
+            changed_ |= ImGui::SliderInt("Colors", &l.colorCount, 2, 4);
+        }
+        if (l.effect != LightEffect::Static) {
+            changed_ |= ImGui::SliderFloat("Speed", &l.periodSeconds, 0.5f, 30.0f, "%.1f s per cycle",
+                                           ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+        }
+        changed_ |= sliderPercent("Brightness", &l.brightness, 5, 100);
+        if (cfg_.settings.gameLightbar &&
+            (cfg_.settings.output == OutputKind::DualShock4 || cfg_.settings.output == OutputKind::DualSense)) {
+            ImGui::TextDisabled("Games may set the lightbar (Settings): when one does, its color wins.");
+        }
+    }
+
+    void drawShareSection(Profile& p) {
+        if (ImGui::Button("Copy share code")) {
+            const std::string code = profileShareCode(p);
+            ImGui::SetClipboardText(code.c_str());
+            shareMessage_ = "Copied \"" + p.name + "\" (" + std::to_string(code.size()) +
+                            " characters) - paste it anywhere to share or back it up.";
+            shareError_ = false;
+        }
+        helpMarker("A short text code with this profile's settings (only what differs from a new profile). "
+                   "Anyone with EdgePad can import it, and you can keep it as a backup.");
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 26.0f);
+        ImGui::InputTextWithHint("##sharecode", "Paste a profile code (EP1-...)", importBuffer_.data(), importBuffer_.size());
+        ImGui::SameLine();
+        if (ImGui::Button("Paste")) {
+            const char* clip = ImGui::GetClipboardText();
+            std::snprintf(importBuffer_.data(), importBuffer_.size(), "%s", clip ? clip : "");
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(cfg_.profiles.size() >= kMaxProfiles || importBuffer_[0] == '\0');
+        if (ImGui::Button("Import as new profile")) {
+            std::string error;
+            if (auto imported = profileFromShareCode(importBuffer_.data(), &error)) {
+                std::string name = imported->name;
+                auto taken = [&](const std::string& n) {
+                    return std::any_of(cfg_.profiles.begin(), cfg_.profiles.end(), [&](const Profile& o) { return o.name == n; });
+                };
+                for (int i = 2; taken(name) && i < 100; ++i) name = imported->name + " (" + std::to_string(i) + ")";
+                for (auto& game : imported->games) {  // a game can only switch to one profile
+                    if (profileForGame(cfg_, game)) game.clear();
+                }
+                normalizeGames(imported->games);
+                addProfile(*imported, name);
+                shareMessage_ = "Imported \"" + name + "\" as a new profile.";
+                shareError_ = false;
+                importBuffer_[0] = '\0';
+            } else {
+                shareMessage_ = "Could not import: " + error;
+                shareError_ = true;
+            }
+        }
+        ImGui::EndDisabled();
+        if (!shareMessage_.empty()) {
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(shareError_ ? kWarn : kMuted), "%s", shareMessage_.c_str());
+        }
+    }
+
+    // A game switches to one profile only: adding it here takes it away from any other.
+    void addGame(Profile& p, const std::string& game) {
+        const std::string name = normalizeGameName(game);
+        if (name.empty()) return;
+        for (auto& other : cfg_.profiles) {
+            if (&other != &p) other.games.erase(std::remove(other.games.begin(), other.games.end(), name), other.games.end());
+        }
+        if (std::find(p.games.begin(), p.games.end(), name) == p.games.end() && p.games.size() < kMaxGames) {
+            p.games.push_back(name);
+        }
+        changed_ = true;
+    }
+
+    void drawGamesSection(Profile& p) {
+        changed_ |= ImGui::Checkbox("Switch profiles automatically for games", &cfg_.settings.autoProfiles);
+        helpMarker("While one of this profile's games is in front, the profile is on; when you leave the game, the "
+                   "profile from before comes back. A profile picked by hand (here or with Fn) always wins until "
+                   "you switch to another program.\n\nGames are matched by their program's file name (cod.exe), "
+                   "including Steam / Proton games on Linux.");
+        if (!status_.foregroundKnown) {
+#if defined(_WIN32)
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kWarn), "Cannot see which program is in front.");
+#else
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kWarn),
+                               "This desktop does not say which window is in front (needs X11 or XWayland).");
+#endif
+        }
+        ImGui::BeginDisabled(!cfg_.settings.autoProfiles);
+        if (p.games.empty()) ImGui::TextDisabled("No games switch to this profile yet.");
+        int removed = -1;
+        for (size_t i = 0; i < p.games.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            if (ImGui::SmallButton("Remove")) removed = static_cast<int>(i);
+            ImGui::SameLine();
+            if (status_.autoGame == p.games[i]) {
+                ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kGood), "%s   (in front now)", p.games[i].c_str());
+            } else {
+                ImGui::TextUnformatted(p.games[i].c_str());
+            }
+            ImGui::PopID();
+        }
+        if (removed >= 0) {
+            p.games.erase(p.games.begin() + removed);
+            changed_ = true;
+        }
+        ImGui::BeginDisabled(p.games.size() >= kMaxGames);
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14.0f);
+        const bool enter = ImGui::InputTextWithHint("##game", "Program, e.g. cod.exe", gameBuffer_.data(), gameBuffer_.size(),
+                                                    ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        if ((ImGui::Button("Add") || enter) && gameBuffer_[0] != '\0') {
+            addGame(p, gameBuffer_.data());
+            gameBuffer_[0] = '\0';
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14.0f);
+        if (ImGui::BeginCombo("##recent", "Add a recent program")) {
+            if (status_.recentApps.empty()) ImGui::TextDisabled("Start the game, then come back here.");
+            const int active = cfg_.settings.activeProfile;
+            for (const auto& app : status_.recentApps) {
+                const auto owner = profileForGame(cfg_, app);
+                if (owner == active) continue;
+                std::string label = app;
+                if (owner) label += "   (now in \"" + cfg_.profiles[static_cast<size_t>(*owner)].name + "\")";
+                if (ImGui::Selectable(label.c_str())) addGame(p, app);
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip("Programs that were in front recently: switch to the game for a moment, then pick it here");
+        ImGui::EndDisabled();
+        ImGui::EndDisabled();
+    }
+
+    void drawProfileTab() {
+        Profile& p = profile();
+        ImGui::PushItemWidth(ImGui::GetFontSize() * 18.0f);
+        ImGui::SeparatorText("Games");
+        drawGamesSection(p);
+        ImGui::SeparatorText("Lightbar");
+        drawLightbarSection(p);
+        ImGui::SeparatorText("Share");
+        drawShareSection(p);
+        ImGui::PopItemWidth();
+    }
+
     void drawSettingsTab() {
         ImGui::PushItemWidth(ImGui::GetFontSize() * 18.0f);
         ImGui::SeparatorText("Controller");
@@ -1335,7 +1662,7 @@ private:
         ImGui::BulletText("Fn + Cross / Circle / Square / Triangle: switch to the profile using that hotkey.");
         ImGui::BulletText("Fn + Options: toggle remapping (raw passthrough) on and off.");
         ImGui::BulletText("Fn is the Edge's Fn buttons, or Mute on a regular DualSense (change it in Settings).");
-        ImGui::BulletText("The player LEDs show the active profile slot, the lightbar shows its colour.");
+        ImGui::BulletText("The player LEDs show the active profile slot, the lightbar its colour or effect.");
         ImGui::SeparatorText("What the settings do");
         ImGui::BulletText("Sticks start exactly 1:1 (no dead zone, default curve): the game gets every step the "
                           "controller sends. Make 1:1 resets a stick back to that.");
@@ -1353,7 +1680,15 @@ private:
         ImGui::BulletText("Buttons can send keyboard keys and mouse buttons, and each can be a toggle or turbo.");
         ImGui::BulletText("Shift layer: hold the shift button (a back button works well) for a second set of binds.");
         ImGui::BulletText("Touchpad zones: split the touchpad into 2 or 4 extra buttons.");
-        ImGui::BulletText("Drifting stick? Sticks tab -> Calibrate sticks.");
+        ImGui::BulletText("Drifting stick? Sticks tab -> Calibrate sticks. The Tester tab shows how much it drifts.");
+        ImGui::SeparatorText("Profile tab");
+        ImGui::BulletText("Games: add a game to a profile and EdgePad switches to it while the game is in front, "
+                          "and back to your previous profile when you leave the game.");
+        ImGui::BulletText("Lightbar: static, breathing, rainbow, colour cycle or battery level, per profile.");
+        ImGui::BulletText("Share: copy a profile as a short code, or paste one to import it as a new profile.");
+        ImGui::SeparatorText("Staying light");
+        ImGui::BulletText("Minimize EdgePad while you play: the window then draws nothing at all. In the background "
+                          "it draws 10 frames a second, or start it with --headless for no window at all.");
         ImGui::PopTextWrapPos();
         ImGui::Spacing();
         const std::string repoUrl = std::string("https://github.com/") + build::kRepository;
@@ -1391,6 +1726,12 @@ private:
     int leftDrag_ = -1;
     int rightDrag_ = -1;
     std::array<char, 64> renameBuffer_{};
+    std::array<char, 8192> importBuffer_{};
+    std::array<char, 160> gameBuffer_{};
+    tester::StickTest leftTest_, rightTest_;
+    tester::TriggerTest l2Test_, r2Test_;
+    std::string shareMessage_;
+    bool shareError_ = false;
     std::string notice_;
     std::string saveError_;
 };
@@ -1411,7 +1752,12 @@ int runGui(Engine& engine, const ConfigStore& store, Updater& updater, GuiOption
         return 2;
     }
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(1);
+    // Vsync, at most ~60 frames per second: on a 144 / 240 Hz screen every 2nd / 4th refresh.
+    int swapInterval = 1;
+    if (const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor()); mode && mode->refreshRate > 75) {
+        swapInterval = std::clamp(static_cast<int>(std::lround(mode->refreshRate / 60.0)), 1, 4);
+    }
+    glfwSwapInterval(swapInterval);
 
     float scaleX = 1.0f, scaleY = 1.0f;
     glfwGetWindowContentScale(window, &scaleX, &scaleY);
@@ -1430,19 +1776,27 @@ int runGui(Engine& engine, const ConfigStore& store, Updater& updater, GuiOption
     int exitCode = 0;
     {
         App app(engine, store, updater, std::move(options), fonts);
+        double lastFrame = 0.0;
         while (!glfwWindowShouldClose(window)) {
-            // Keep the UI cheap while gaming: full rate only when focused and visible.
+            // Keep the UI cheap while gaming: full rate only when focused and visible, 10 frames a
+            // second in the background, nothing drawn at all while minimized.
             const bool focused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
             const bool iconified = glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE;
             if (iconified) {
-                glfwWaitEventsTimeout(0.25);
+                app.idle(glfwGetTime());
+                glfwWaitEventsTimeout(1.0);
                 continue;
             }
             if (focused) {
                 glfwPollEvents();
+                // Vsync can be off (driver setting): never more than ~60 frames per second.
+                if (const double wait = lastFrame + 1.0 / 62.0 - glfwGetTime(); wait > 0.002) {
+                    std::this_thread::sleep_for(std::chrono::duration<double>(wait));
+                }
             } else {
-                glfwWaitEventsTimeout(1.0 / 15.0);
+                glfwWaitEventsTimeout(1.0 / 10.0);
             }
+            lastFrame = glfwGetTime();
 
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();

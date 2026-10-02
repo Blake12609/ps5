@@ -59,11 +59,29 @@ std::string_view buttonLabel(Button b);  // human readable, e.g. "Left back butt
 std::optional<Button> buttonFromId(std::string_view id);
 
 // A real button on the controller (not a virtual touchpad zone).
-bool isPhysicalButton(Button b);
+constexpr bool isPhysicalButton(Button b) { return b < Button::TouchLeft; }
 // Can the button be used as a remap source? (L2/R2 are analog and handled by trigger settings)
-bool isRemapSource(Button b);
+constexpr bool isRemapSource(Button b) { return b != Button::L2 && b != Button::R2 && b != Button::Count; }
 // Can the button be produced by the virtual controller?
-bool isRemapTarget(Button b);
+constexpr bool isRemapTarget(Button b) {
+    switch (b) {
+        // Mute is a target: a virtual DualSense has one (Xbox / DualShock 4 output have no Mute).
+        case Button::PaddleLeft:
+        case Button::PaddleRight:
+        case Button::FnLeft:
+        case Button::FnRight:
+        case Button::TouchLeft:
+        case Button::TouchRight:
+        case Button::TouchTopLeft:
+        case Button::TouchTopRight:
+        case Button::TouchBottomLeft:
+        case Button::TouchBottomRight:
+        case Button::Count:
+            return false;
+        default:
+            return true;
+    }
+}
 
 // One finger on the touchpad (DualSense resolution 1920 x 1080).
 struct TouchPoint {

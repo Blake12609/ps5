@@ -55,6 +55,8 @@ add_library(edgepad_core STATIC
   src/core/virtual_reports.cpp
   src/core/virtual_dualsense.cpp
   src/core/usbip_session.cpp
+  src/core/tester.cpp
+  src/core/auto_profile.cpp
   src/core/version.cpp
   src/core/sha256.cpp
   src/core/release_info.cpp
@@ -80,6 +82,7 @@ if(WIN32)
     src/platform/controller_hide_win.cpp
     src/platform/virtual_dualsense_win.cpp
     src/platform/keyboard_win.cpp
+    src/platform/foreground_win.cpp
     src/platform/http_winhttp.cpp)
 else()
   list(APPEND EDGEPAD_PLATFORM_SOURCES
@@ -87,12 +90,16 @@ else()
     src/platform/controller_hide_linux.cpp
     src/platform/virtual_dualsense_linux.cpp
     src/platform/keyboard_uinput.cpp
+    src/platform/foreground_linux.cpp
     src/platform/http_curl.cpp)
 endif()
 
 add_library(edgepad_platform STATIC ${EDGEPAD_PLATFORM_SOURCES})
 target_link_libraries(edgepad_platform PUBLIC edgepad_core ${EDGEPAD_HIDAPI_TARGET})
 target_compile_options(edgepad_platform PRIVATE ${EDGEPAD_WARNINGS})
+if(NOT WIN32)
+  target_link_libraries(edgepad_platform PUBLIC ${CMAKE_DL_LIBS})
+endif()
 if(WIN32)
   if(MSVC)
     # ViGEmClient's headers contain non UTF-8 characters in comments.
@@ -155,6 +162,9 @@ if(EDGEPAD_BUILD_TESTS)
     tests/test_virtual_reports.cpp
     tests/test_virtual_dualsense.cpp
     tests/test_usbip_server.cpp
+    tests/test_extras.cpp
+    tests/test_engine.cpp
+    src/app/engine.cpp
   )
   target_link_libraries(edgepad_tests PRIVATE edgepad_platform doctest::doctest Threads::Threads)
   # Include real std headers instead of doctest's forward declarations (newer MSVC rejects them).
