@@ -30,7 +30,9 @@ TEST_CASE("engine: status is always quick to read, stopping is quick (demo contr
     }
     CHECK(connected);
     CHECK(slowestMs < 100.0);
-    CHECK(engine.status().reportRate > 100.0f);  // the demo controller's reports keep flowing
+    // The demo controller's reports keep flowing (it sleeps 4 ms per report, which Windows rounds
+    // up to its ~15.6 ms timer tick: 60+ reports a second there, 250 elsewhere).
+    CHECK(engine.status().reportRate > 20.0f);
 
     const auto t = Clock::now();
     engine.stop();
