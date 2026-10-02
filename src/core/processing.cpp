@@ -281,7 +281,12 @@ Vec2 GyroAim::update(const MotionState& motion, const GyroSettings& s, const std
     const float deadzone = std::max(0.0f, s.deadzone);
     if (magnitude <= deadzone) return {};
     // Stick deflection grows with rotation speed; full deflection at 360 / sensitivity deg/s.
-    const float deflection = clamp01((magnitude - deadzone) * std::max(0.01f, s.sensitivity) / 360.0f);
+    float sensitivity = std::max(0.01f, s.sensitivity);
+    if (const float precision = std::clamp(s.precision, 0.0f, 0.9f); precision > 0.0f) {
+        const float speed = clamp01(magnitude / std::max(1.0f, s.precisionSpeed));
+        sensitivity *= 1.0f - precision * (1.0f - speed);
+    }
+    const float deflection = clamp01((magnitude - deadzone) * sensitivity / 360.0f);
     const float ad = clamp01(s.antiDeadzone);
     const float out = ad + (1.0f - ad) * deflection;
     return {v.x / magnitude * out, v.y / magnitude * out};

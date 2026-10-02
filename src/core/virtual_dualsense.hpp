@@ -54,6 +54,7 @@ struct OutputFilter {
     bool rumble = true;    // compatible vibration / haptics
     bool lights = true;    // lightbar, player LEDs
     bool triggers = true;  // adaptive trigger effects
+    float rumbleStrength = 1.0f;  // rumble motors scaled to this
 };
 
 // A game's output report (USB report 0x02) with the parts the settings keep for EdgePad removed.

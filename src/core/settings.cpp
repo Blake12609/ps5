@@ -131,11 +131,14 @@ void normalizeGyro(GyroSettings& g) {
     if (g.activation >= GyroActivation::Count) g.activation = GyroActivation::Off;
     if (g.horizontalAxis >= GyroAxis::Count) g.horizontalAxis = GyroAxis::Yaw;
     if (!isPhysicalButton(g.button)) g.button = Button::L2;
+    if (g.button2 && (!isPhysicalButton(*g.button2) || *g.button2 == g.button)) g.button2.reset();
     g.sensitivity = clampRange(g.sensitivity, 0.25f, 10.0f);
     g.verticalRatio = clampRange(g.verticalRatio, 0.0f, 2.0f);
     g.deadzone = clampRange(g.deadzone, 0.0f, 20.0f);
     g.smoothing = clampRange(g.smoothing, 0.0f, 1.0f);
     g.antiDeadzone = clampRange(g.antiDeadzone, 0.0f, 0.6f);
+    g.precision = clampRange(g.precision, 0.0f, 0.9f);
+    g.precisionSpeed = clampRange(g.precisionSpeed, 5.0f, 200.0f);
 }
 
 }  // namespace
@@ -178,6 +181,7 @@ Config Config::defaults() {
 }
 
 void Config::normalize() {
+    settings.rumbleStrength = clampRange(settings.rumbleStrength, 0.1f, 1.0f);
     if (profiles.empty()) profiles = defaults().profiles;
     if (profiles.size() > kMaxProfiles) profiles.resize(kMaxProfiles);
     for (auto& p : profiles) {
@@ -189,6 +193,13 @@ void Config::normalize() {
         normalizeTrigger(p.r2);
         for (auto& b : p.buttons) normalizeBinding(b, false);
         for (auto& b : p.shiftButtons) normalizeBinding(b, true);
+        for (auto& b : p.holdButtons) {
+            normalizeBinding(b, false);
+            b.toggle = false;  // a hold action is a plain press while held
+            b.turbo = false;
+        }
+        p.holdMs = std::clamp(p.holdMs, kHoldMinMs, kHoldMaxMs);
+        p.touchpadMouseSpeed = clampRange(p.touchpadMouseSpeed, 0.25f, 4.0f);
         if (p.shiftButton && (!isRemapSource(*p.shiftButton) || *p.shiftButton >= Button::Count)) p.shiftButton.reset();
         if (p.touchpadZones >= TouchpadZones::Count) p.touchpadZones = TouchpadZones::Off;
         if (p.zoneTrigger >= ZoneTrigger::Count) p.zoneTrigger = ZoneTrigger::Click;
@@ -196,7 +207,7 @@ void Config::normalize() {
         if (p.light.effect >= LightEffect::Count) p.light.effect = LightEffect::Static;
         p.light.colorCount = std::clamp(p.light.colorCount, 2, 4);
         p.light.periodSeconds = clampRange(p.light.periodSeconds, 0.5f, 30.0f);
-        p.light.brightness = clampRange(p.light.brightness, 0.05f, 1.0f);
+        p.light.brightness = clampRange(p.light.brightness, 0.0f, 1.0f);
         normalizeGames(p.games);
         if (p.hotkey && std::find(kProfileHotkeys.begin(), kProfileHotkeys.end(), *p.hotkey) == kProfileHotkeys.end()) {
             p.hotkey.reset();

@@ -14,16 +14,16 @@ as a single portable executable, and updates itself from this repository's relea
 | **Response curves** | DualSense Edge presets (Default, Quick, Precise, Steady, Digital, Dynamic) with adjustable strength, plus a **Custom** curve you drag with the mouse |
 | **RC filter** | GameSir style: a real RC filter on the stick, active only while you move it. Positive = *Smooth* (RC low-pass that removes micro-jitter). Negative = *Amplify*, the same filter flipped, so your own stick movement becomes jitter in the aim direction while your aim speed stays exactly the same |
 | **Triggers** | Dead zone, **trigger stop** (short trigger range), anti-dead zone, **rapid hair trigger** (full press the moment you pull, releases as soon as you ease off, fires again without letting go), **turbo** (1–100 ms between presses, optionally randomized), adaptive-trigger **resistance wall** that makes the stop something you can feel |
-| **Gyro aiming** | Turn or tilt the controller to fine-aim on top of the right stick. Always on, while a button is held (e.g. L2 for aim down sights) or toggled. Sensitivity, vertical speed, yaw or roll, dead zone, smoothing for slow movements only, anti-dead zone, drift calibration |
-| **Buttons** | Map any button, including the Edge **back buttons**, to a controller button, full L2/R2 press, **keyboard key** or **mouse button**, or disable it. Per-button **toggle** and **turbo** with its own 1–100 ms interval, optionally randomized (e.g. 10 ms ± 2 ms) |
+| **Gyro aiming** | Turn or tilt the controller to fine-aim on top of the right stick. Always on, while a button is held (e.g. L2 for aim down sights, or **L2 or R2**: aiming or firing) or toggled, with one-click presets. Sensitivity, **precision** for small corrections, vertical speed, yaw or roll, dead zone, smoothing for slow movements only, anti-dead zone, drift calibration |
+| **Buttons** | Map any button, including the Edge **back buttons**, to a controller button, full L2/R2 press, **keyboard key** or **mouse button**, or disable it. Per-button **toggle** and **turbo** with its own 1–100 ms interval, optionally randomized (e.g. 10 ms ± 2 ms). **Hold actions**: a button does something else when held down |
 | **Shift layer** | Hold a shift button (e.g. a back button) and every button switches to a second set of bindings |
-| **Touchpad zones** | Split the touchpad into 2 or 4 extra buttons, fired on click or on touch, which is great on a regular DualSense |
+| **Touchpad** | Split the touchpad into 2 or 4 extra buttons, fired on click or on touch, which is great on a regular DualSense. Or use it as a **mouse**: one finger moves the pointer, click to click, two fingers scroll |
 | **Profiles** | Up to 16 profiles. **Fn + Cross/Circle/Square/Triangle** switches profile from the controller, like the Edge. Player LEDs show the active profile |
 | **Auto profile per game** | Add a game to a profile, and EdgePad switches to it while that game is in front, then back to your previous profile when you leave it. A profile picked by hand always wins. Pick the game from a list of recent programs. Works with Steam / Proton games on Linux too |
-| **Lightbar** | Per profile: a static colour, **breathing**, **rainbow**, **colour cycle** through 2–4 colours, or **battery level** (red to green, breathing while charging), with speed and brightness |
+| **Lightbar** | Per profile: a static colour, **breathing**, **rainbow**, **colour cycle** through 2–4 colours, or **battery level** (red to green, breathing while charging), with speed and brightness, or off |
 | **Share codes** | Copy a profile as a short text code (`EP1-...`) to share or back up, and paste one to import it as a new profile. The code is checksummed, so a damaged code is rejected |
-| **Controller tester** | Stick circularity and coverage, resting noise (drift), trigger travel, and report rate, latency jitter and EdgePad's own processing time per report, measured live |
-| **Controller** | DualSense and DualSense Edge over USB or Bluetooth, battery level, game rumble forwarded back to the controller |
+| **Controller tester** | Stick circularity and coverage, resting noise (drift), trigger travel, and report rate, latency jitter and EdgePad's own processing time per report, measured live. **Recoil practice**: keep a recoiling crosshair on target with the stick or gyro |
+| **Controller** | DualSense and DualSense Edge over USB or Bluetooth, battery level, game rumble forwarded back to the controller with adjustable **rumble strength**, **low battery alert** (the lightbar pulses red) |
 | **Output** | A virtual **PS5 controller (DualSense)** with no ViGEmBus. Games get a genuine wired DualSense whose adaptive triggers, rumble and lightbar reach your real controller. Or a virtual **Xbox 360** / **PlayStation 4 (DualShock 4)** controller via ViGEmBus. On Linux: UHID / uinput |
 | **Hide controller** | **Hide the real controller from games** so they only see the virtual one: no double input. Uses HidHide when it's installed (EdgePad sets it up and undoes it by itself), otherwise exclusive access. On Linux it grabs the controller's input devices |
 | **Portable** | One exe. Settings live in `EdgePad-data/` next to it, so the folder can sit on a USB stick |
@@ -187,6 +187,13 @@ The filter is time-based, so it feels the same at 250 Hz or 1000 Hz.
 
 The gyro adds to the right stick, so the stick still handles big turns.
 
+**Gyro for recoil (single-player shooters):** click **While firing** or **Aiming or firing** under
+Quick setup. The gyro then turns on while R2 (or L2 or R2) is held, and you counter recoil by tilting the
+controller down slightly. It's much finer than pulling the stick. These presets also switch on
+**Precision**, which gives slow, small movements less sensitivity while fast turns keep the full speed.
+**Tester → Recoil practice** lets you try your settings: hold R2 and keep the climbing, kicking crosshair on
+the target. You do the aiming yourself; EdgePad doesn't move the aim for you.
+
 ## Automatic profiles per game
 
 In the **Profile** tab, under **Games**, add the games that should use this profile. Type the program's
@@ -230,6 +237,13 @@ Every button in the **Buttons** tab can send a controller button, a keyboard key
 - **Toggle:** tap once to hold the bind, tap again to release it.
 - **Turbo:** repeats the press, with a *ms between presses* slider from 1 to 100 ms. The triggers have their own turbo in the Triggers tab.
 - **Turbo randomize:** each press gets its own time to the next one, picked at random from a range that wide around the set time. 10 ms with 4 ms random fires anywhere from 8 to 12 ms apart, never faster than 1 ms. At 0 the timing is exact.
+
+**Hold actions:** in the Buttons tab, switch to the **Hold actions** view and pick what a button sends
+when you hold it for the **Hold time** (300 ms by default) or longer. A shorter press sends the button's
+normal binding as a quick tap when you let go. Buttons without a hold action aren't delayed at all.
+
+**Touchpad as a mouse:** set **Touchpad** to *Mouse pointer*. One finger moves the pointer, clicking the
+pad is a left click (a right click with two fingers on it), and two fingers scroll. The speed is adjustable.
 
 Keyboard and mouse binds use Windows `SendInput` with hardware scan codes, which games read. Some
 anti-cheat systems ignore injected keyboard/mouse input, and turbo or rapid fire is banned in many

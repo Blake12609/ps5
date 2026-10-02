@@ -25,6 +25,12 @@ Button touchpadZoneAt(const TouchPoint& touch, TouchpadZones zones);
 // `gameLightbar` is the colour a game set on the virtual DualShock 4, if any.
 // The profile's lightbar color at `seconds` (its effect: static, breathing, rainbow, color cycle,
 // battery level). `battery` is 0..100, or -1 when unknown.
+// Battery level at which the lightbar starts pulsing red (Settings: low battery alert).
+inline constexpr int kLowBatteryPercent = 10;
+bool lowBatteryAlert(const Config& cfg, int battery, bool charging);
+// Game rumble at the strength set in Settings.
+uint8_t scaleRumble(uint8_t value, float strength);
+
 std::array<uint8_t, 3> lightbarColor(const Profile& profile, double seconds, int battery = -1, bool charging = false);
 
 dualsense::Effects effectsForConfig(const Config& cfg, uint8_t rumbleLarge, uint8_t rumbleSmall,
@@ -51,6 +57,16 @@ private:
     std::optional<Button> zoneLatched_;
     ButtonMask toggled_ = 0;       // toggle bindings currently on
     ButtonMask turboRunning_ = 0;  // turbo bindings currently firing
+    // Hold actions: pressed, not long enough yet / held long enough / short press being sent.
+    ButtonMask holdPending_ = 0;
+    ButtonMask holdActive_ = 0;
+    ButtonMask holdTap_ = 0;
+    std::array<float, kButtonCount> holdTimer_{};  // seconds held / tap seconds left
+    // Touchpad mouse.
+    void touchpadMouse(const InputState& in, const Profile& p, ButtonMask& sources, OutputState& out);
+    TouchPoint lastTouch_[2]{};
+    float pointerRestX_ = 0.0f, pointerRestY_ = 0.0f, wheelRest_ = 0.0f;  // sub-pixel / sub-notch carry
+    std::optional<Key> mouseClick_;  // button held since the pad was clicked
     std::array<Turbo, kButtonCount> turbo_{};
     int lastProfile_ = -1;
 

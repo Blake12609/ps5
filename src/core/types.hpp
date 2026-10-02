@@ -131,6 +131,8 @@ struct OutputState {
     ButtonMask buttons = 0;
     MotionState motion;
     KeyMask keys;  // keyboard keys / mouse buttons to hold down
+    // Mouse pointer movement (pixels) and scroll wheel notches to send with this report.
+    int mouseX = 0, mouseY = 0, wheel = 0;
     int battery = -1;
     bool charging = false;
     RawReport raw;  // the controller's report this state was made from

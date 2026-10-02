@@ -205,13 +205,14 @@ std::optional<Binding> bindingFromJson(const json& j) {
     return b;
 }
 
-json bindingMapToJson(const BindingMap& map, bool skipInherit) {
+json bindingMapToJson(const BindingMap& map, bool skipInherit, bool skipDisabled = false) {
     json out = json::object();
     for (int i = 0; i < kButtonCount; ++i) {
         const Button src = buttonAt(i);
         if (!isRemapSource(src)) continue;
         const Binding& b = map[static_cast<size_t>(i)];
         if (skipInherit && b.kind == Binding::Kind::Inherit) continue;
+        if (skipDisabled && b.kind == Binding::Kind::Disabled) continue;
         out[std::string(buttonId(src))] = bindingToJson(b);
     }
     return out;
@@ -233,12 +234,15 @@ json gyroToJson(const GyroSettings& g) {
     return {
         {"activation", enumId(g.activation)},
         {"button", std::string(buttonId(g.button))},
+        {"button2", g.button2 ? json(std::string(buttonId(*g.button2))) : json(nullptr)},
         {"sensitivity", g.sensitivity},
         {"vertical_ratio", g.verticalRatio},
         {"horizontal_axis", enumId(g.horizontalAxis)},
         {"deadzone", g.deadzone},
         {"smoothing", g.smoothing},
         {"anti_deadzone", g.antiDeadzone},
+        {"precision", g.precision},
+        {"precision_speed", g.precisionSpeed},
         {"invert_x", g.invertX},
         {"invert_y", g.invertY},
     };
@@ -249,12 +253,18 @@ void gyroFromJson(const json& j, GyroSettings& g) {
     if (auto it = j.find("button"); it != j.end() && it->is_string()) {
         if (auto b = buttonFromId(it->get<std::string>())) g.button = *b;
     }
+    if (auto it = j.find("button2"); it != j.end()) {
+        g.button2.reset();
+        if (it->is_string()) g.button2 = buttonFromId(it->get<std::string>());
+    }
     readFloat(j, "sensitivity", g.sensitivity);
     readFloat(j, "vertical_ratio", g.verticalRatio);
     readEnum(j, "horizontal_axis", g.horizontalAxis);
     readFloat(j, "deadzone", g.deadzone);
     readFloat(j, "smoothing", g.smoothing);
     readFloat(j, "anti_deadzone", g.antiDeadzone);
+    readFloat(j, "precision", g.precision);
+    readFloat(j, "precision_speed", g.precisionSpeed);
     readBool(j, "invert_x", g.invertX);
     readBool(j, "invert_y", g.invertY);
 }
@@ -288,6 +298,10 @@ json profileToJson(const Profile& p) {
         {"buttons", bindingMapToJson(p.buttons, false)},
         {"shift_button", p.shiftButton ? json(std::string(buttonId(*p.shiftButton))) : json(nullptr)},
         {"shift_buttons", bindingMapToJson(p.shiftButtons, true)},
+        {"hold_buttons", bindingMapToJson(p.holdButtons, false, true)},
+        {"hold_ms", p.holdMs},
+        {"touchpad_mouse", p.touchpadMouse},
+        {"touchpad_mouse_speed", p.touchpadMouseSpeed},
         {"touchpad_zones", enumId(p.touchpadZones)},
         {"zone_trigger", enumId(p.zoneTrigger)},
         {"gyro", gyroToJson(p.gyro)},
@@ -341,6 +355,10 @@ Profile profileFromJson(const json& j) {
         p.shiftButton = it->is_string() ? buttonFromId(it->get<std::string>()) : std::nullopt;
     }
     if (const json* c = child(j, "shift_buttons")) bindingMapFromJson(*c, p.shiftButtons);
+    if (const json* c = child(j, "hold_buttons")) bindingMapFromJson(*c, p.holdButtons);
+    readInt(j, "hold_ms", p.holdMs);
+    readBool(j, "touchpad_mouse", p.touchpadMouse);
+    readFloat(j, "touchpad_mouse_speed", p.touchpadMouseSpeed);
     readEnum(j, "touchpad_zones", p.touchpadZones);
     readEnum(j, "zone_trigger", p.zoneTrigger);
     if (const json* c = child(j, "gyro")) gyroFromJson(*c, p.gyro);
@@ -463,6 +481,8 @@ std::string configToJson(const Config& cfg) {
              {"output", enumId(cfg.settings.output)},
              {"fn_mode", enumId(cfg.settings.fnMode)},
              {"rumble", cfg.settings.rumble},
+             {"rumble_strength", cfg.settings.rumbleStrength},
+             {"low_battery_alert", cfg.settings.lowBatteryAlert},
              {"game_lightbar", cfg.settings.gameLightbar},
              {"auto_update", cfg.settings.autoUpdate},
              {"hide_controller", cfg.settings.hideController},
@@ -490,6 +510,8 @@ Config configFromJson(const std::string& text, std::string* warning) {
         readEnum(*s, "output", cfg.settings.output);
         readEnum(*s, "fn_mode", cfg.settings.fnMode);
         readBool(*s, "rumble", cfg.settings.rumble);
+        readFloat(*s, "rumble_strength", cfg.settings.rumbleStrength);
+        readBool(*s, "low_battery_alert", cfg.settings.lowBatteryAlert);
         readBool(*s, "game_lightbar", cfg.settings.gameLightbar);
         readBool(*s, "auto_update", cfg.settings.autoUpdate);
         readBool(*s, "hide_controller", cfg.settings.hideController);

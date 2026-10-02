@@ -230,6 +230,10 @@ std::optional<std::array<uint8_t, dualsense::kOutputCommonSize>> filterGameOutpu
         c[kFlags2] &= static_cast<uint8_t>(~kFlag2Rumble);
         c[kMotorRight] = 0;
         c[kMotorLeft] = 0;
+    } else if (filter.rumbleStrength < 1.0f) {
+        const float s = std::max(0.0f, filter.rumbleStrength);
+        c[kMotorRight] = static_cast<uint8_t>(static_cast<float>(c[kMotorRight]) * s + 0.5f);
+        c[kMotorLeft] = static_cast<uint8_t>(static_cast<float>(c[kMotorLeft]) * s + 0.5f);
     }
     if (!filter.triggers) c[kFlags0] &= static_cast<uint8_t>(~kFlag0Triggers);
     if (!filter.lights) {

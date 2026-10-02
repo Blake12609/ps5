@@ -164,6 +164,7 @@ if(EDGEPAD_BUILD_TESTS)
     tests/test_usbip_server.cpp
     tests/test_extras.cpp
     tests/test_engine.cpp
+    tests/test_controller_features.cpp
     src/app/engine.cpp
   )
   target_link_libraries(edgepad_tests PRIVATE edgepad_platform doctest::doctest Threads::Threads)

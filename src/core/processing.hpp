@@ -89,12 +89,18 @@ enum class GyroAxis : uint8_t { Yaw, Roll, Count };  // what turns the aim left 
 struct GyroSettings {
     GyroActivation activation = GyroActivation::Off;
     Button button = Button::L2;       // hold / toggle button (e.g. aim down sights)
+    std::optional<Button> button2;    // turns it on as well (e.g. R2: while aiming or firing)
     float sensitivity = 3.0f;         // full stick deflection at 360/sensitivity degrees per second
     float verticalRatio = 1.0f;       // vertical speed relative to horizontal
     GyroAxis horizontalAxis = GyroAxis::Yaw;
     float deadzone = 1.5f;            // degrees per second ignored (hand tremor, sensor noise)
     float smoothing = 0.25f;          // 0..1, smooths slow movements only, fast ones stay instant
     float antiDeadzone = 0.15f;       // minimum stick output while the gyro moves (beats game dead zones)
+    // Precision for small corrections (recoil, fine aim): movements slower than `precisionSpeed`
+    // get less sensitivity - down to (1 - precision) of it when barely moving. Fast turns keep the
+    // full sensitivity. 0 = off.
+    float precision = 0.0f;
+    float precisionSpeed = 40.0f;  // degrees per second
     bool invertX = false;
     bool invertY = false;
 

@@ -248,8 +248,7 @@ void Engine::run() {
     std::unique_ptr<KeyboardOutput> keyboard;
     KeyMask keysDown;
     bool keyboardFailed = false;
-    auto syncKeys = [&](const KeyMask& wanted) {
-        if (wanted == keysDown || demo_) return;  // demo mode never types real keys
+    auto ensureKeyboard = [&]() -> KeyboardOutput* {  // created the first time it is needed
         if (!keyboard && !keyboardFailed) {
             std::string error;
             keyboard = createKeyboardOutput(error);
@@ -257,7 +256,11 @@ void Engine::run() {
             std::lock_guard lock(mutex_);
             status_.keyboardMessage = error;
         }
-        if (!keyboard) return;
+        return keyboard.get();
+    };
+    auto syncKeys = [&](const KeyMask& wanted) {
+        if (wanted == keysDown || demo_) return;  // demo mode never types real keys
+        if (!ensureKeyboard()) return;
         for (int i = 1; i < kKeyCount; ++i) {
             const Key k = static_cast<Key>(i);
             if (wanted.test(k) != keysDown.test(k)) keyboard->set(k, wanted.test(k));
@@ -430,6 +433,9 @@ void Engine::run() {
             }
             reportStats.add(dt * 1000.0f, std::chrono::duration<float, std::micro>(Clock::now() - t).count());
             syncKeys(output.keys);
+            if ((output.mouseX != 0 || output.mouseY != 0 || output.wheel != 0) && !demo_) {
+                if (KeyboardOutput* mouse = ensureKeyboard()) mouse->move(output.mouseX, output.mouseY, output.wheel);
+            }
 
             ++reportsInWindow;
             const float window = std::chrono::duration<float>(t - rateWindowStart).count();
@@ -465,7 +471,8 @@ void Engine::run() {
         const uint16_t rumble = pad ? rumble_.load() : 0;
         const uint32_t lb = pad && padKind == OutputKind::DualShock4 ? gameLightbar_.load() : 0;
         // Lightbar animations step at 30 frames per second: smooth to the eye, few writes.
-        const bool animated = cfg.active().light.effect != LightEffect::Static;
+        const bool animated =
+            cfg.active().light.effect != LightEffect::Static || lowBatteryAlert(cfg, lastBattery, lastCharging);
         const int64_t frame =
             animated ? static_cast<int64_t>(std::chrono::duration<double>(Clock::now() - effectsStart).count() * 30.0) : 0;
         const EffectsKey effectsKey{configGeneration, cfg.settings.activeProfile, cfg.settings.enabled, rumble, lb,
@@ -492,7 +499,8 @@ void Engine::run() {
                 lastProfile = cfg.settings.activeProfile;
                 gameParts &= static_cast<uint8_t>(~dualsense::kPartTriggers);  // clear a previous profile's wall
             }
-            const virtual_dualsense::OutputFilter filter{cfg.settings.rumble, cfg.settings.gameLightbar, !profileTriggers};
+            const virtual_dualsense::OutputFilter filter{cfg.settings.rumble, cfg.settings.gameLightbar, !profileTriggers,
+                                                         cfg.settings.rumbleStrength};
             for (const auto& report : pad->takeOutputReports()) {
                 const auto common = virtual_dualsense::filterGameOutput(report.data(), report.size(), filter);
                 if (!common) continue;

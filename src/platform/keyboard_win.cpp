@@ -80,6 +80,25 @@ public:
         }
         return SendInput(1, &input, sizeof(INPUT)) == 1;
     }
+
+    bool move(int dx, int dy, int wheel) override {
+        INPUT inputs[2]{};
+        UINT count = 0;
+        if (dx != 0 || dy != 0) {
+            inputs[count].type = INPUT_MOUSE;
+            inputs[count].mi.dx = dx;
+            inputs[count].mi.dy = dy;
+            inputs[count].mi.dwFlags = MOUSEEVENTF_MOVE;
+            ++count;
+        }
+        if (wheel != 0) {
+            inputs[count].type = INPUT_MOUSE;
+            inputs[count].mi.mouseData = static_cast<DWORD>(wheel * WHEEL_DELTA);
+            inputs[count].mi.dwFlags = MOUSEEVENTF_WHEEL;
+            ++count;
+        }
+        return count == 0 || SendInput(count, inputs, sizeof(INPUT)) == count;
+    }
 };
 
 }  // namespace

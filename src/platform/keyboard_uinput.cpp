@@ -80,6 +80,15 @@ public:
         return emit(EV_KEY, code, down ? 1 : 0) && emit(EV_SYN, SYN_REPORT, 0);
     }
 
+    bool move(int dx, int dy, int wheel) override {
+        if (dx == 0 && dy == 0 && wheel == 0) return true;
+        bool ok = true;
+        if (dx != 0) ok = emit(EV_REL, REL_X, dx) && ok;
+        if (dy != 0) ok = emit(EV_REL, REL_Y, dy) && ok;
+        if (wheel != 0) ok = emit(EV_REL, REL_WHEEL, wheel) && ok;
+        return emit(EV_SYN, SYN_REPORT, 0) && ok;
+    }
+
 private:
     bool emit(int type, int code, int value) {
         input_event ev{};
@@ -102,7 +111,8 @@ std::unique_ptr<KeyboardOutput> createKeyboardOutput(std::string& error) {
     }
     bool ok = ioctl(fd, UI_SET_EVBIT, EV_KEY) == 0 && ioctl(fd, UI_SET_EVBIT, EV_SYN) == 0 &&
               ioctl(fd, UI_SET_EVBIT, EV_REL) == 0 && ioctl(fd, UI_SET_RELBIT, REL_X) == 0 &&
-              ioctl(fd, UI_SET_RELBIT, REL_Y) == 0;  // relative axes so mouse buttons are treated as a mouse
+              ioctl(fd, UI_SET_RELBIT, REL_Y) == 0 &&  // a real mouse: pointer movement for the touchpad
+              ioctl(fd, UI_SET_RELBIT, REL_WHEEL) == 0;
     for (int i = 1; i < kKeyCount && ok; ++i) {
         const int code = linuxCode(static_cast<Key>(i));
         if (code >= 0) ok = ioctl(fd, UI_SET_KEYBIT, code) == 0;

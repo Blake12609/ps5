@@ -129,10 +129,18 @@ std::array<uint8_t, 3> lightbarColor(const Profile& p, double seconds, int batte
         case LightEffect::Count:
             break;
     }
-    const float scale = level * std::clamp(l.brightness, 0.05f, 1.0f);
+    const float scale = level * std::clamp(l.brightness, 0.0f, 1.0f);
     std::array<uint8_t, 3> out{};
     for (size_t i = 0; i < 3; ++i) out[i] = static_cast<uint8_t>(std::clamp(color[i] * scale, 0.0f, 255.0f) + 0.5f);
     return out;
+}
+
+bool lowBatteryAlert(const Config& cfg, int battery, bool charging) {
+    return cfg.settings.lowBatteryAlert && battery >= 0 && battery <= kLowBatteryPercent && !charging;
+}
+
+uint8_t scaleRumble(uint8_t value, float strength) {
+    return static_cast<uint8_t>(static_cast<float>(value) * std::clamp(strength, 0.0f, 1.0f) + 0.5f);
 }
 
 dualsense::Effects effectsForConfig(const Config& cfg, uint8_t rumbleLarge, uint8_t rumbleSmall,
@@ -141,14 +149,18 @@ dualsense::Effects effectsForConfig(const Config& cfg, uint8_t rumbleLarge, uint
     dualsense::Effects fx;
     const Profile& p = cfg.active();
     fx.lightbar = (cfg.settings.gameLightbar && gameLightbar) ? *gameLightbar : lightbarColor(p, seconds, battery, charging);
+    if (lowBatteryAlert(cfg, battery, charging)) {  // pulses red once a second, whatever else is set
+        const float level = 0.15f + 0.85f * static_cast<float>(0.5 + 0.5 * std::cos(6.283185307 * seconds));
+        fx.lightbar = {static_cast<uint8_t>(255.0f * level + 0.5f), 0, 0};
+    }
     if (cfg.settings.enabled) {
         fx.playerLeds = playerLedsForProfile(cfg.settings.activeProfile);
         fx.leftTrigger = dualsense::triggerEffectFor(p.l2);
         fx.rightTrigger = dualsense::triggerEffectFor(p.r2);
     }
     if (cfg.settings.rumble) {
-        fx.rumbleLeft = rumbleLarge;
-        fx.rumbleRight = rumbleSmall;
+        fx.rumbleLeft = scaleRumble(rumbleLarge, cfg.settings.rumbleStrength);
+        fx.rumbleRight = scaleRumble(rumbleSmall, cfg.settings.rumbleStrength);
     }
     return fx;
 }
@@ -224,8 +236,9 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     if (p.swapSticks) std::swap(leftOut, rightOut);
 
     // Gyro aiming adds to the right stick.
-    const Vec2 gyro = gyro_.update(in.motion, p.gyro, cfg.settings.gyroBias, has(pressed, p.gyro.button),
-                                   has(newlyPressed, p.gyro.button), dtSeconds);
+    const ButtonMask gyroButtons = bit(p.gyro.button) | (p.gyro.button2 ? bit(*p.gyro.button2) : 0);
+    const Vec2 gyro = gyro_.update(in.motion, p.gyro, cfg.settings.gyroBias, (pressed & gyroButtons) != 0,
+                                   (newlyPressed & gyroButtons) != 0, dtSeconds);
     if (gyro.x != 0.0f || gyro.y != 0.0f) {
         // Never longer than full deflection, or than the stick alone (whose corners may reach a
         // bit further): without gyro movement the stick stays exactly as it is.
@@ -248,7 +261,10 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
 
     // Touchpad zones: where the pad is clicked (or touched) becomes its own button.
     ButtonMask sources = usable;
-    if (p.touchpadZones != TouchpadZones::Off) {
+    if (p.touchpadMouse) {
+        touchpadMouse(in, p, sources, out);
+        zoneLatched_.reset();
+    } else if (p.touchpadZones != TouchpadZones::Off) {
         const bool clickMode = p.zoneTrigger == ZoneTrigger::Click;
         const bool pressedZone = clickMode ? has(usable, Button::Touchpad) : in.motion.touch[0].active;
         if (pressedZone) {
@@ -271,19 +287,57 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
 
     // Only buttons that are held, toggled on or firing turbo can produce anything or have state to
     // clear: every other button is skipped (usually all but a few).
-    for (ButtonMask visit = (sources | toggled_ | turboRunning_) & kRemapSourceMask; visit != 0; visit &= visit - 1) {
+    const ButtonMask holdBusy = holdPending_ | holdActive_ | holdTap_;
+    for (ButtonMask visit = (sources | toggled_ | turboRunning_ | holdBusy) & kRemapSourceMask; visit != 0;
+         visit &= visit - 1) {
         const int i = std::countr_zero(visit);
         const Button src = buttonAt(i);
         const ButtonMask m = bit(src);
         const size_t k = static_cast<size_t>(i);
-        const bool held = has(sources, src);
         const Binding& shifted = p.shiftButtons[k];
-        const Binding& b =
-            (has(shiftLatched_, src) && shifted.kind != Binding::Kind::Inherit) ? shifted : p.buttons[k];
+        const bool shiftLayer = has(shiftLatched_, src) && shifted.kind != Binding::Kind::Inherit;
+        const Binding& b = shiftLayer ? shifted : p.buttons[k];
+
+        // What the button's normal binding sees: the button itself, or - with a hold action - a
+        // short tap after a short press.
+        bool held = has(sources, src);
+        bool pressed = has(newSources, src);
+        if (pressed) holdTap_ &= ~m;  // pressed again during a tap: the tap ends
+        const Binding& hold = p.holdButtons[k];
+        if (pressed && !shiftLayer && (hold.kind == Binding::Kind::Button || hold.kind == Binding::Kind::Key)) {
+            holdPending_ |= m;
+            holdTimer_[k] = 0.0f;
+        }
+        if (has(holdPending_ | holdActive_ | holdTap_, src)) {
+            bool tapStarts = false;
+            if (has(holdPending_, src)) {
+                if (held) {
+                    holdTimer_[k] += std::max(0.0f, dtSeconds);
+                    if (holdTimer_[k] * 1000.0f >= static_cast<float>(p.holdMs)) {
+                        holdPending_ &= ~m;
+                        holdActive_ |= m;
+                    }
+                } else {  // let go early: a short press of the normal binding
+                    holdPending_ &= ~m;
+                    holdTap_ |= m;
+                    holdTimer_[k] = kHoldTapSeconds;
+                    tapStarts = true;
+                }
+            } else if (has(holdActive_, src) && !held) {
+                holdActive_ &= ~m;
+            }
+            if (has(holdTap_, src) && !tapStarts) {
+                holdTimer_[k] -= std::max(0.0f, dtSeconds);
+                if (holdTimer_[k] <= 0.0f) holdTap_ &= ~m;
+            }
+            if (has(holdActive_, src)) emit(hold, out);
+            held = has(holdTap_, src);
+            pressed = tapStarts;
+        }
 
         bool active = held;
         if (b.toggle) {
-            if (has(newSources, src)) toggled_ ^= m;
+            if (pressed) toggled_ ^= m;
             active = has(toggled_, src);
         } else {
             toggled_ &= ~m;
@@ -300,13 +354,67 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
     return out;
 }
 
+// Touchpad mouse: pointer from one finger's movement, scrolling from two, clicks from the pad's
+// button. Movement only counts while the same finger stays down (a new touch never jumps).
+void Pipeline::touchpadMouse(const InputState& in, const Profile& p, ButtonMask& sources, OutputState& out) {
+    constexpr float kPixelsPerStep = 0.6f;   // touchpad steps (1920 across) to screen pixels at speed 1
+    constexpr float kStepsPerNotch = 60.0f;  // two-finger travel for one scroll wheel notch
+    const TouchPoint& a = in.motion.touch[0];
+    const TouchPoint& b = in.motion.touch[1];
+    auto moved = [](const TouchPoint& now, const TouchPoint& before, float& dx, float& dy) {
+        if (!now.active || !before.active || now.id != before.id) return false;
+        dx = static_cast<float>(now.x) - static_cast<float>(before.x);
+        dy = static_cast<float>(now.y) - static_cast<float>(before.y);
+        return true;
+    };
+    float dx = 0.0f, dy = 0.0f, dx2 = 0.0f, dy2 = 0.0f;
+    if (a.active && b.active) {
+        // Two fingers: natural scrolling (the page follows the fingers).
+        if (moved(a, lastTouch_[0], dx, dy) && moved(b, lastTouch_[1], dx2, dy2)) {
+            wheelRest_ += (dy + dy2) * 0.5f / kStepsPerNotch;
+        }
+        pointerRestX_ = pointerRestY_ = 0.0f;
+    } else if (a.active && moved(a, lastTouch_[0], dx, dy)) {
+        const float scale = kPixelsPerStep * std::clamp(p.touchpadMouseSpeed, 0.25f, 4.0f);
+        pointerRestX_ += dx * scale;
+        pointerRestY_ += dy * scale;
+        wheelRest_ = 0.0f;
+    } else {
+        pointerRestX_ = pointerRestY_ = wheelRest_ = 0.0f;
+    }
+    out.mouseX = static_cast<int>(pointerRestX_);  // whole pixels now, the rest carries over
+    out.mouseY = static_cast<int>(pointerRestY_);
+    out.wheel = static_cast<int>(wheelRest_);
+    pointerRestX_ -= static_cast<float>(out.mouseX);
+    pointerRestY_ -= static_cast<float>(out.mouseY);
+    wheelRest_ -= static_cast<float>(out.wheel);
+    lastTouch_[0] = a;
+    lastTouch_[1] = b;
+
+    // Clicking the pad: left click, or right click with two fingers on it. Which one is decided when
+    // the click starts and kept until it ends.
+    if (has(sources, Button::Touchpad)) {
+        if (!mouseClick_) mouseClick_ = b.active ? Key::MouseRight : Key::MouseLeft;
+        out.keys.set(*mouseClick_, true);
+    } else {
+        mouseClick_.reset();
+    }
+    sources &= ~bit(Button::Touchpad);
+}
+
 void Pipeline::resetLayers() {
     prevSources_ = 0;
     shiftLatched_ = 0;
     zoneLatched_.reset();
     toggled_ = 0;
     turboRunning_ = 0;
+    holdPending_ = 0;
+    holdActive_ = 0;
+    holdTap_ = 0;
     for (auto& t : turbo_) t.reset();
+    lastTouch_[0] = lastTouch_[1] = TouchPoint{};
+    pointerRestX_ = pointerRestY_ = wheelRest_ = 0.0f;
+    mouseClick_.reset();
 }
 
 void Pipeline::reset() {

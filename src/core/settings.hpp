@@ -57,6 +57,10 @@ struct Binding {
 
 inline constexpr int kTurboMinMs = 1;
 inline constexpr int kTurboMaxMs = 100;
+inline constexpr int kHoldMinMs = 150;
+inline constexpr int kHoldMaxMs = 1500;
+// How long a short press of a button with a hold action is sent for (after it is let go).
+inline constexpr float kHoldTapSeconds = 0.06f;
 
 // Binding table indexed by source button.
 using BindingMap = std::array<Binding, kButtonCount>;
@@ -72,7 +76,7 @@ struct LightbarSettings {
     std::array<std::array<uint8_t, 3>, 3> extraColors{{{255, 0, 120}, {0, 255, 140}, {255, 190, 0}}};
     int colorCount = 3;          // colors in the cycle, 2..4
     float periodSeconds = 4.0f;  // one breath / one trip around the rainbow / one cycle, 0.5..30 s
-    float brightness = 1.0f;     // 0.05..1
+    float brightness = 1.0f;     // 0..1 (0 = lightbar off)
 
     bool operator==(const LightbarSettings&) const = default;
 };
@@ -92,8 +96,18 @@ struct Profile {
     BindingMap buttons = defaultButtonMap();
     std::optional<Button> shiftButton;             // hold for the shift layer
     BindingMap shiftButtons = defaultShiftMap();
+    // Hold actions (normal layer): holding a button for `holdMs` or longer sends its hold binding
+    // instead, a shorter press sends its normal binding as a quick tap. Disabled = no hold action
+    // (the button then works exactly as before, with no delay).
+    BindingMap holdButtons{};
+    int holdMs = 300;
     TouchpadZones touchpadZones = TouchpadZones::Off;
     ZoneTrigger zoneTrigger = ZoneTrigger::Click;
+    // Touchpad as a mouse: one finger moves the pointer, a click is a left click (with two fingers
+    // on the pad a right click), two fingers scroll. Replaces the touchpad zones and the touchpad
+    // button while on.
+    bool touchpadMouse = false;
+    float touchpadMouseSpeed = 1.0f;  // 0.25..4
     GyroSettings gyro;
 
     bool operator==(const Profile&) const = default;
@@ -103,6 +117,8 @@ struct Settings {
     OutputKind output = OutputKind::Xbox360;
     FnMode fnMode = FnMode::Auto;
     bool rumble = true;         // forward game rumble to the controller
+    float rumbleStrength = 1.0f;  // game rumble scaled to this, 0.1..1 (like the PS5's vibration intensity)
+    bool lowBatteryAlert = true;  // the lightbar pulses red at 10% battery or less (not while charging)
     bool gameLightbar = false;  // DualShock 4 output: let games set the lightbar colour
     bool autoUpdate = true;  // download and install new releases automatically
     // Hide the real controller from games (HidHide or exclusive access on Windows, an input grab on
