@@ -38,6 +38,7 @@ void normalizeTrigger(TriggerSettings& t) {
     t.resistanceStrength = std::clamp(t.resistanceStrength, 1, 8);
     t.hairResetDistance = clampRange(t.hairResetDistance, kHairMinReset, 0.5f);
     t.turboIntervalMs = std::clamp(t.turboIntervalMs, kTurboMinMs, kTurboMaxMs);
+    t.turboRandomMs = std::clamp(t.turboRandomMs, 0, kTurboMaxMs);
     if (t.mode >= TriggerMode::Count) t.mode = TriggerMode::Analog;
     if (t.resistance >= TriggerResistance::Count) t.resistance = TriggerResistance::Off;
 }
@@ -123,6 +124,7 @@ void normalizeBinding(Binding& b, bool allowInherit) {
         b.turbo = false;
     }
     b.turboIntervalMs = std::clamp(b.turboIntervalMs, kTurboMinMs, kTurboMaxMs);
+    b.turboRandomMs = std::clamp(b.turboRandomMs, 0, kTurboMaxMs);
 }
 
 void normalizeGyro(GyroSettings& g) {

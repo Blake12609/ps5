@@ -77,6 +77,7 @@ struct TriggerSettings {
     float hairResetDistance = kHairDefaultReset;
     bool turbo = false;        // rapid fire: pulse full presses while the trigger is pressed
     int turboIntervalMs = 50;  // time between turbo presses, 1..100 ms
+    int turboRandomMs = 0;     // the time between presses varies at random over a range this wide
 
     bool operator==(const TriggerSettings&) const = default;
 };
@@ -148,15 +149,27 @@ Vec2 processStick(float x, float y, const StickSettings& s);
 
 // Turbo / rapid fire timing: while active, alternates on and off so that a new press starts
 // every `intervalMs`. Changes at most once per controller report.
+// `randomMs` > 0: every press cycle gets its own length, at random within a range that wide
+// centred on `intervalMs` (10 ms with 4 ms random: anywhere from 8 to 12 ms, never under 1 ms).
 class Turbo {
 public:
-    bool update(bool active, int intervalMs, float dtSeconds);
-    void reset() { *this = Turbo{}; }
+    bool update(bool active, int intervalMs, float dtSeconds, int randomMs = 0);
+    // Stops firing; the random sequence carries on (the next burst does not repeat the last one).
+    void reset() {
+        running_ = false;
+        on_ = false;
+        timer_ = 0.0f;
+    }
 
 private:
+    float cycleHalf(int intervalMs, int randomMs);  // half of a press cycle, seconds
+    static uint32_t newSeed();
+
     bool running_ = false;
     bool on_ = false;
     float timer_ = 0.0f;
+    float half_ = 0.0f;  // half of the current press cycle (on, then off)
+    uint32_t random_ = newSeed();
 };
 
 // Hair trigger never fires closer to the top than this, so resting noise cannot fire it.

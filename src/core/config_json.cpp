@@ -137,6 +137,7 @@ json triggerToJson(const TriggerSettings& t) {
         {"hair_reset_distance", t.hairResetDistance},
         {"turbo", t.turbo},
         {"turbo_ms", t.turboIntervalMs},
+        {"turbo_random_ms", t.turboRandomMs},
     };
 }
 
@@ -151,6 +152,7 @@ void triggerFromJson(const json& j, TriggerSettings& t) {
     readFloat(j, "hair_reset_distance", t.hairResetDistance);
     readBool(j, "turbo", t.turbo);
     readInt(j, "turbo_ms", t.turboIntervalMs);
+    readInt(j, "turbo_random_ms", t.turboRandomMs);
 }
 
 // Binding target as text: "cross", "none", "inherit", "key:space", "key:mouse_left".
@@ -175,7 +177,8 @@ std::optional<Binding> bindingFromTarget(const std::string& text) {
     return std::nullopt;
 }
 
-// Plain string when there are no extras, otherwise {"to": ..., "toggle": ..., "turbo": ..., "turbo_ms": ...}.
+// Plain string when there are no extras, otherwise
+// {"to": ..., "toggle": ..., "turbo": ..., "turbo_ms": ..., "turbo_random_ms": ...}.
 json bindingToJson(const Binding& b) {
     if (!b.toggle && !b.turbo) return bindingTarget(b);
     json j = {{"to", bindingTarget(b)}};
@@ -183,6 +186,7 @@ json bindingToJson(const Binding& b) {
     if (b.turbo) {
         j["turbo"] = true;
         j["turbo_ms"] = b.turboIntervalMs;
+        if (b.turboRandomMs > 0) j["turbo_random_ms"] = b.turboRandomMs;
     }
     return j;
 }
@@ -197,6 +201,7 @@ std::optional<Binding> bindingFromJson(const json& j) {
     readBool(j, "toggle", b->toggle);
     readBool(j, "turbo", b->turbo);
     readInt(j, "turbo_ms", b->turboIntervalMs);
+    readInt(j, "turbo_random_ms", b->turboRandomMs);
     return b;
 }
 

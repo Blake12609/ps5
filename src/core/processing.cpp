@@ -1,6 +1,8 @@
 #include "core/processing.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 
 namespace edgepad {
@@ -134,27 +136,53 @@ float processTrigger(float value, const TriggerSettings& s) {
     return ad + (1.0f - ad) * t;
 }
 
-bool Turbo::update(bool active, int intervalMs, float dtSeconds) {
+bool Turbo::update(bool active, int intervalMs, float dtSeconds, int randomMs) {
     if (!active) {
-        running_ = false;
-        on_ = false;
-        timer_ = 0.0f;
+        reset();
         return false;
     }
     if (!running_) {  // first press goes out immediately
         running_ = true;
         on_ = true;
         timer_ = 0.0f;
+        half_ = cycleHalf(intervalMs, randomMs);
         return true;
     }
-    const float half = static_cast<float>(std::clamp(intervalMs, 1, 1000)) / 2000.0f;
+    if (randomMs <= 0) half_ = cycleHalf(intervalMs, 0);  // follows the slider right away
     timer_ += std::clamp(dtSeconds, 0.0f, 0.1f);
-    if (timer_ >= half) {
+    if (timer_ >= half_) {
         on_ = !on_;
-        timer_ -= half;
-        if (timer_ >= half) timer_ = 0.0f;  // never flip twice in one report
+        timer_ -= half_;
+        if (on_ && randomMs > 0) half_ = cycleHalf(intervalMs, randomMs);  // a new press: a new length
+        if (timer_ >= half_) timer_ = 0.0f;  // never flip twice in one report
     }
     return on_;
+}
+
+float Turbo::cycleHalf(int intervalMs, int randomMs) {
+    float ms = static_cast<float>(std::clamp(intervalMs, 1, 1000));
+    if (randomMs > 0) {
+        // xorshift32: cheap, and plenty random for timing.
+        random_ ^= random_ << 13;
+        random_ ^= random_ >> 17;
+        random_ ^= random_ << 5;
+        const float u = static_cast<float>(random_ >> 8) * (1.0f / 16777216.0f);  // 0..1
+        ms = std::max(1.0f, ms + (u - 0.5f) * static_cast<float>(std::clamp(randomMs, 0, 1000)));
+    }
+    return ms / 2000.0f;
+}
+
+uint32_t Turbo::newSeed() {
+    // Every turbo gets its own sequence, different on every run.
+    static std::atomic<uint32_t> next{
+        static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count())};
+    uint32_t x = next.fetch_add(0x9E3779B9u, std::memory_order_relaxed);
+    x ^= x >> 16;
+    x *= 0x7FEB352Du;
+    x ^= x >> 15;
+    x *= 0x846CA68Bu;
+    x ^= x >> 16;
+    return x != 0 ? x : 1u;  // xorshift never leaves 0
 }
 
 float TriggerProcessor::apply(float value, const TriggerSettings& s, float dtSeconds) {
@@ -170,7 +198,7 @@ float TriggerProcessor::apply(float value, const TriggerSettings& s, float dtSec
         turbo_.reset();
         return out;
     }
-    return turbo_.update(out > 0.0f, s.turboIntervalMs, dtSeconds) ? 1.0f : 0.0f;
+    return turbo_.update(out > 0.0f, s.turboIntervalMs, dtSeconds, s.turboRandomMs) ? 1.0f : 0.0f;
 }
 
 float TriggerProcessor::hair(float value, const TriggerSettings& s) {

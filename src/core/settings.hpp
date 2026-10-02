@@ -45,6 +45,7 @@ struct Binding {
     bool toggle = false;       // tap to switch on, tap again to switch off
     bool turbo = false;        // repeat presses while active
     int turboIntervalMs = 50;  // time between turbo presses, 1..100 ms
+    int turboRandomMs = 0;     // the time between presses varies at random over a range this wide
 
     static Binding toButton(edgepad::Button b);
     static Binding toKey(edgepad::Key k);

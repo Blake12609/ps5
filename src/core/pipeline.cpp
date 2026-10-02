@@ -290,7 +290,7 @@ OutputState Pipeline::process(const InputState& in, Config& cfg, float dtSeconds
         }
         if (b.turbo) {
             turboRunning_ = active ? (turboRunning_ | m) : (turboRunning_ & ~m);
-            active = turbo_[k].update(active, b.turboIntervalMs, dtSeconds);
+            active = turbo_[k].update(active, b.turboIntervalMs, dtSeconds, b.turboRandomMs);
         } else {
             turbo_[k].reset();
             turboRunning_ &= ~m;

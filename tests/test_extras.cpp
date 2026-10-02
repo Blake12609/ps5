@@ -4,6 +4,7 @@
 #include <cmath>
 #include <optional>
 #include <set>
+#include <vector>
 #include <string>
 
 #include "core/auto_profile.hpp"
@@ -373,4 +374,96 @@ TEST_CASE("auto profile: game names are file names, any case") {
     const Config cfg = gamesConfig();
     CHECK(profileForGame(cfg, "D:\\Games\\COD.EXE") == 1);
     CHECK_FALSE(profileForGame(cfg, "notepad.exe"));
+}
+
+namespace {
+
+// Milliseconds from one turbo press to the next, stepping time in 0.1 ms reports.
+std::vector<double> turboGaps(Turbo& turbo, int intervalMs, int randomMs, int presses) {
+    std::vector<double> gaps;
+    bool wasOn = false;
+    double lastStart = -1.0;
+    for (int step = 0; static_cast<int>(gaps.size()) < presses && step < 10'000'000; ++step) {
+        const double now = step * 0.1;
+        const bool on = turbo.update(true, intervalMs, 0.0001f, randomMs);
+        if (on && !wasOn) {
+            if (lastStart >= 0.0) gaps.push_back(now - lastStart);
+            lastStart = now;
+        }
+        wasOn = on;
+    }
+    return gaps;
+}
+
+}  // namespace
+
+TEST_CASE("turbo random: 10 ms with 4 ms random fires every 8 to 12 ms, spread over the whole range") {
+    Turbo turbo;
+    const auto gaps = turboGaps(turbo, 10, 4, 500);
+    REQUIRE(gaps.size() == 500);
+    double sum = 0.0;
+    const auto [low, high] = std::minmax_element(gaps.begin(), gaps.end());
+    for (double g : gaps) sum += g;
+    CHECK(*low >= 8.0 - 0.15);
+    CHECK(*high <= 12.0 + 0.15);
+    CHECK(*low < 8.4);   // reaches both ends, not just the middle
+    CHECK(*high > 11.6);
+    CHECK(sum / gaps.size() == doctest::Approx(10.0).epsilon(0.03));
+}
+
+TEST_CASE("turbo random: off keeps the exact interval; the range never goes under 1 ms") {
+    Turbo exact;
+    for (double g : turboGaps(exact, 10, 0, 100)) CHECK(g == doctest::Approx(10.0).epsilon(0.02));
+
+    Turbo wide;  // 2 ms with 10 ms random: -3..7 ms, held at 1 ms at the bottom
+    for (double g : turboGaps(wide, 2, 10, 300)) {
+        CHECK(g >= 1.0 - 0.15);
+        CHECK(g <= 7.0 + 0.15);
+    }
+}
+
+TEST_CASE("turbo random: every button has its own sequence, and a new burst does not repeat the last") {
+    Turbo a, b;
+    const auto first = turboGaps(a, 20, 10, 20);
+    CHECK(first != turboGaps(b, 20, 10, 20));
+    a.reset();
+    CHECK(first != turboGaps(a, 20, 10, 20));
+}
+
+TEST_CASE("turbo random: buttons and triggers use it through the pipeline, and it is saved") {
+    Config cfg = Config::defaults();
+    Profile& p = cfg.active();
+    p.buttons[static_cast<size_t>(index(Button::Cross))].turbo = true;
+    p.buttons[static_cast<size_t>(index(Button::Cross))].turboIntervalMs = 20;
+    p.buttons[static_cast<size_t>(index(Button::Cross))].turboRandomMs = 8;
+    p.r2.turbo = true;
+    p.r2.turboIntervalMs = 30;
+    p.r2.turboRandomMs = 150;  // clamped to 100
+    cfg.normalize();
+    CHECK(p.r2.turboRandomMs == kTurboMaxMs);
+
+    Pipeline pipe;
+    InputState in;
+    in.buttons = bit(Button::Cross);
+    std::vector<int> gaps;
+    bool wasOn = false;
+    int lastStart = -1;
+    for (int ms = 0; ms < 3000; ++ms) {
+        const bool on = has(pipe.process(in, cfg, 0.001f).buttons, Button::Cross);
+        if (on && !wasOn) {
+            if (lastStart >= 0) gaps.push_back(ms - lastStart);
+            lastStart = ms;
+        }
+        wasOn = on;
+    }
+    REQUIRE(gaps.size() > 100);
+    const auto [low, high] = std::minmax_element(gaps.begin(), gaps.end());
+    CHECK(*low >= 15);  // 16-24 ms, in whole 1 ms reports
+    CHECK(*high <= 25);
+    CHECK(*low < *high);
+
+    const Config loaded = configFromJson(configToJson(cfg));
+    CHECK(loaded.active().buttons[static_cast<size_t>(index(Button::Cross))].turboRandomMs == 8);
+    CHECK(loaded.active().r2.turboRandomMs == kTurboMaxMs);
+    CHECK(loaded == cfg);
 }

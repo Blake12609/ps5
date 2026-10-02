@@ -171,6 +171,22 @@ bool sliderPercent(const char* label, float* value, float minPct, float maxPct, 
     return changed;
 }
 
+// Turbo timing spread: shows the range it gives, e.g. "4 ms random: 8-12 ms".
+bool turboRandomSlider(const char* label, int intervalMs, int& randomMs) {
+    char format[96];
+    if (randomMs <= 0) {
+        std::snprintf(format, sizeof(format), "randomize: off");
+    } else {
+        const double low = std::max(1.0, intervalMs - randomMs / 2.0);
+        const double high = intervalMs + randomMs / 2.0;
+        std::snprintf(format, sizeof(format), "%%d ms random: %g-%g ms", low, high);
+    }
+    const bool changed = ImGui::SliderInt(label, &randomMs, 0, kTurboMaxMs, format, ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip("Every press gets its own time to the next one, at random within a range this wide around the "
+                          "set time: 10 ms with 4 ms random = anywhere from 8 to 12 ms. 0 = always exactly the set time.");
+    return changed;
+}
+
 template <typename Enum, typename LabelFn>
 bool enumCombo(const char* label, Enum& value, LabelFn labelOf) {
     bool changed = false;
@@ -854,6 +870,7 @@ private:
                                          ImGuiSliderFlags_AlwaysClamp);
             helpMarker("1-100 ms from one press to the next. The controller reports every ~4 ms and most games read "
                        "input once per frame, so very short times are limited by those.");
+            changed_ |= turboRandomSlider("Randomize", t.turboIntervalMs, t.turboRandomMs);
         }
         changed_ |= enumCombo("Adaptive resistance", t.resistance, resistanceLabel);
         if (t.resistance == TriggerResistance::Wall) {
@@ -892,6 +909,7 @@ private:
                     next.toggle = b.toggle;
                     next.turbo = b.turbo;
                     next.turboIntervalMs = b.turboIntervalMs;
+                    next.turboRandomMs = b.turboRandomMs;
                     b = next;
                     changed = true;
                 }
@@ -955,6 +973,8 @@ private:
                 ImGui::SetItemTooltip(
                     "Time between turbo presses (1-100 ms). The controller reports every ~4 ms and most games read "
                     "input once per frame, so very short times are limited by those.");
+                ImGui::SetNextItemWidth(-1.0f);
+                changed_ |= turboRandomSlider("##turbo_random", b.turboIntervalMs, b.turboRandomMs);
             }
             ImGui::EndDisabled();
         }

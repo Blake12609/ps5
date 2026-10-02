@@ -13,9 +13,9 @@ as a single portable executable, and updates itself from this repository's relea
 | **Sticks** | **Exactly 1:1 by default**: every stick step reaches the game as the controller sent it, diagonals included. **Anti-dead zone** that shrinks the game's own dead zone (it adds none itself), inner / outer dead zone, radial or axial dead zone, invert X/Y, swap sticks, one-click **drift calibration** |
 | **Response curves** | DualSense Edge presets (Default, Quick, Precise, Steady, Digital, Dynamic) with adjustable strength, plus a **Custom** curve you drag with the mouse |
 | **RC filter** | GameSir style: a real RC filter on the stick, active only while you move it. Positive = *Smooth* (RC low-pass that removes micro-jitter). Negative = *Amplify*, the same filter flipped, so your own stick movement becomes jitter in the aim direction while your aim speed stays exactly the same |
-| **Triggers** | Dead zone, **trigger stop** (short trigger range), anti-dead zone, **rapid hair trigger** (full press the moment you pull, releases as soon as you ease off, fires again without letting go), **turbo** (1–100 ms between presses), adaptive-trigger **resistance wall** that makes the stop something you can feel |
+| **Triggers** | Dead zone, **trigger stop** (short trigger range), anti-dead zone, **rapid hair trigger** (full press the moment you pull, releases as soon as you ease off, fires again without letting go), **turbo** (1–100 ms between presses, optionally randomized), adaptive-trigger **resistance wall** that makes the stop something you can feel |
 | **Gyro aiming** | Turn or tilt the controller to fine-aim on top of the right stick. Always on, while a button is held (e.g. L2 for aim down sights) or toggled. Sensitivity, vertical speed, yaw or roll, dead zone, smoothing for slow movements only, anti-dead zone, drift calibration |
-| **Buttons** | Map any button, including the Edge **back buttons**, to a controller button, full L2/R2 press, **keyboard key** or **mouse button**, or disable it. Per-button **toggle** and **turbo** with its own 1–100 ms interval |
+| **Buttons** | Map any button, including the Edge **back buttons**, to a controller button, full L2/R2 press, **keyboard key** or **mouse button**, or disable it. Per-button **toggle** and **turbo** with its own 1–100 ms interval, optionally randomized (e.g. 10 ms ± 2 ms) |
 | **Shift layer** | Hold a shift button (e.g. a back button) and every button switches to a second set of bindings |
 | **Touchpad zones** | Split the touchpad into 2 or 4 extra buttons, fired on click or on touch, which is great on a regular DualSense |
 | **Profiles** | Up to 16 profiles. **Fn + Cross/Circle/Square/Triangle** switches profile from the controller, like the Edge. Player LEDs show the active profile |
@@ -229,6 +229,7 @@ The **Tester** tab measures the controller itself, before any EdgePad processing
 Every button in the **Buttons** tab can send a controller button, a keyboard key or a mouse button:
 - **Toggle:** tap once to hold the bind, tap again to release it.
 - **Turbo:** repeats the press, with a *ms between presses* slider from 1 to 100 ms. The triggers have their own turbo in the Triggers tab.
+- **Turbo randomize:** each press gets its own time to the next one, picked at random from a range that wide around the set time. 10 ms with 4 ms random fires anywhere from 8 to 12 ms apart, never faster than 1 ms. At 0 the timing is exact.
 
 Keyboard and mouse binds use Windows `SendInput` with hardware scan codes, which games read. Some
 anti-cheat systems ignore injected keyboard/mouse input, and turbo or rapid fire is banned in many
